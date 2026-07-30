@@ -1,0 +1,98 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { PageHeader } from "@/components/layout/PageHeader";
+import {
+  PracticeDetailTabs,
+  type PracticeDetail,
+} from "@/components/settings/PracticeDetailTabs";
+import { Badge } from "@/components/ui/Badge";
+import { canManageBatches } from "@/lib/ar-access";
+import { Role } from "@/lib/generated/prisma/enums";
+import { prisma } from "@/lib/prisma";
+import { requireUser } from "@/lib/session";
+import { displayEin, displayZip } from "@/lib/validations/identifiers";
+import { formatPhone } from "@/components/ui/PhoneInput";
+
+export const metadata: Metadata = { title: "Practice Detail" };
+export const dynamic = "force-dynamic";
+
+export default async function PracticeDetailPage({
+  params,
+}: {
+  params: { practiceId: string };
+}) {
+  const user = await requireUser();
+
+  if (!canManageBatches(user)) notFound();
+
+  const practice = await prisma.practice.findUnique({
+    where: { id: params.practiceId },
+    include: {
+      providers: {
+        orderBy: [{ isActive: "desc" }, { lastName: "asc" }],
+      },
+    },
+  });
+
+  if (!practice) notFound();
+
+  // Stored normalised; formatted for display on the way in.
+  const detail: PracticeDetail = {
+    id: practice.id,
+    name: practice.name,
+    ehrSource: practice.ehrSource,
+    isActive: practice.isActive,
+    taxId: displayEin(practice.taxId),
+    npi: practice.npi ?? "",
+    taxonomy: practice.taxonomy ?? "",
+    medicarePtan: practice.medicarePtan ?? "",
+    medicaidProviderNumber: practice.medicaidProviderNumber ?? "",
+    billingAddressLine1: practice.billingAddressLine1 ?? "",
+    billingAddressLine2: practice.billingAddressLine2 ?? "",
+    billingCity: practice.billingCity ?? "",
+    billingState: practice.billingState ?? "",
+    billingZip: displayZip(practice.billingZip),
+    contactPersonName: practice.contactPersonName ?? "",
+    contactPhone: formatPhone(practice.contactPhone ?? ""),
+    contactFax: formatPhone(practice.contactFax ?? ""),
+    contactEmail: practice.contactEmail ?? "",
+  };
+
+  return (
+    <div className="mx-auto max-w-5xl">
+      <PageHeader
+        title={practice.name}
+        description="Practice profile, billing address, contacts and provider roster."
+        action={
+          <div className="flex items-center gap-3">
+            <Badge variant={practice.isActive ? "brand" : "neutral"}>
+              {practice.isActive ? "Active" : "Inactive"}
+            </Badge>
+            <Link
+              href="/settings/practices"
+              className="text-sm font-medium text-brand-700 hover:text-brand-800"
+            >
+              ← All practices
+            </Link>
+          </div>
+        }
+      />
+
+      <PracticeDetailTabs
+        practice={detail}
+        providers={practice.providers.map((provider) => ({
+          id: provider.id,
+          firstName: provider.firstName,
+          lastName: provider.lastName,
+          npi: provider.npi,
+          licenseNumber: provider.licenseNumber,
+          licenseState: provider.licenseState,
+          taxonomy: provider.taxonomy,
+          isActive: provider.isActive,
+        }))}
+        canEdit={user.role === Role.OWNER}
+      />
+    </div>
+  );
+}

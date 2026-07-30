@@ -1,0 +1,769 @@
+// MedicaGrow Billing Operations Platform
+// Shared platform schema. Module-specific models (AR Follow-Up, Eligibility,
+// TO DO Management, ERA/EOB Posting) are appended as each module is built.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+// Connection URLs live in prisma.config.ts (CLI) and lib/prisma.ts (runtime adapter).
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  PROJECT_MANAGER
+  BILLER
+}
+
+enum EhrSource {
+  OPEN_PM
+  SIMPLE_PRACTICE
+  THERAPYNOTE
+  ECW
+  OFFICE_ALLY
+}
+
+/**
+ * ========================================================================== *
+ * Module 1 — AR Follow-Up Management                                        *
+ * All tables in this module use the ar_ table prefix.                       *
+ * ==========================================================================
+ */
+
+enum BatchStatus {
+  OPEN
+  CLOSED
+}
+
+enum StatusCategory {
+  RED
+  BLUE
+  GREEN
+}
+
+enum OutcomeType {
+  PAID
+  DENIED
+  NO_CLAIM_ON_FILE
+  PATIENT_RESPONSIBILITY
+  IN_PROCESS
+  CHECK_WITH_OFFICE
+  WRITE_OFF
+  OTHER
+}
+
+model User {
+  id             String   @id @default(cuid())
+  name           String
+  email          String   @unique
+  hashedPassword String
+  role           Role     @default(BILLER)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  practices        UserPractice[] @relation("UserPracticeAssignee")
+  practicesGranted UserPractice[] @relation("UserPracticeAssigner")
+
+  arBatchesUploaded   ArBatch[]    @relation("ArBatchUploadedBy")
+  arBatchesClosed     ArBatch[]    @relation("ArBatchClosedBy")
+  arClaimsAssigned    ArClaim[]    @relation("ArClaimAssignedTo")
+  arClaimsLastWorked  ArClaim[]    @relation("ArClaimLastWorkedBy")
+  arWorkNotes         ArWorkNote[] @relation("ArWorkNoteWorkedBy")
+  arWorkNotesAssigned ArWorkNote[] @relation("ArWorkNoteAssignedTo")
+
+  eobBatchesPosted     EobBatch[]    @relation("EobBatchPostedBy")
+  eobEntriesAssigned   EobEntry[]    @relation("EobEntryAssignedTo")
+  eobEntriesResolved   EobEntry[]    @relation("EobEntryResolvedBy")
+  eobWorkNotes         EobWorkNote[] @relation("EobWorkNoteWorkedBy")
+  eobWorkNotesAssigned EobWorkNote[] @relation("EobWorkNoteAssignedTo")
+
+  trackerEntered TrackerEntry[] @relation("TrackerEnteredBy")
+  trackerUpdated TrackerEntry[] @relation("TrackerUpdatedBy")
+  trackerLocked  TrackerEntry[] @relation("TrackerLockedBy")
+
+  todosCreated     Todo[]      @relation("TodoCreatedBy")
+  todosAssigned    Todo[]      @relation("TodoAssignedTo")
+  todosCompleted   Todo[]      @relation("TodoCompletedBy")
+  todosSubAssigned Todo[]      @relation("TodoSubAssignedTo")
+  todoNotes        TodoNote[]  @relation("TodoNoteAddedBy")
+  timeBlocks       TimeBlock[] @relation("TimeBlockUser")
+
+  tasksCreated   Task[]     @relation("TaskCreatedBy")
+  tasksAssigned  Task[]     @relation("TaskAssignedTo")
+  tasksCompleted Task[]     @relation("TaskCompletedBy")
+  taskNotes      TaskNote[] @relation("TaskNoteAddedBy")
+
+  trackerConfigUpdates TrackerConfig[] @relation("TrackerConfigUpdatedBy")
+
+  @@index([role])
+}
+
+model Practice {
+  id        String    @id @default(cuid())
+  name      String
+  /// Reference/reporting only — imports use the standard CSV, not per-EHR parsers.
+  ehrSource EhrSource
+  isActive  Boolean   @default(true)
+
+  /// Identifiers. Stored normalised (digits only) and formatted for display.
+  taxId                  String? // EIN, 9 digits, shown as XX-XXXXXXX
+  npi                    String? // 10 digits
+  taxonomy               String? // 10-character taxonomy code
+  medicarePtan           String?
+  medicaidProviderNumber String?
+
+  billingAddressLine1 String?
+  billingAddressLine2 String?
+  billingCity         String?
+  billingState        String? // 2-letter code
+  billingZip          String? // 5 or 9 digits, shown as XXXXX or XXXXX-XXXX
+
+  contactPersonName String?
+  contactPhone      String? // 10 digits
+  contactFax        String? // 10 digits
+  contactEmail      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users          UserPractice[]
+  arBatches      ArBatch[]
+  providers      PracticeProvider[]
+  eobBatches     EobBatch[]
+  trackerEntries TrackerEntry[]
+  todos          Todo[]
+  tasks          Task[]
+
+  @@index([ehrSource])
+  @@index([isActive])
+}
+
+/// Rendering providers billing under a practice group.
+model PracticeProvider {
+  id            String   @id @default(cuid())
+  practiceId    String
+  firstName     String
+  lastName      String
+  npi           String // 10 digits
+  licenseNumber String?
+  licenseState  String? // 2-letter code
+  taxonomy      String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  practice Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+
+  @@index([practiceId, isActive])
+  @@index([npi])
+  @@map("practice_providers")
+}
+
+/// Controls which users can access which practices.
+model UserPractice {
+  id           String   @id @default(cuid())
+  userId       String
+  practiceId   String
+  assignedAt   DateTime @default(now())
+  assignedById String?
+
+  user       User     @relation("UserPracticeAssignee", fields: [userId], references: [id], onDelete: Cascade)
+  practice   Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+  assignedBy User?    @relation("UserPracticeAssigner", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, practiceId])
+  @@index([practiceId])
+  @@index([assignedById])
+}
+
+/// One monthly AR report upload for one practice.
+/// Exactly one OPEN batch per practice — enforced in the API layer, not here,
+/// because Postgres partial unique indexes are not expressible in Prisma schema.
+model ArBatch {
+  id                   String      @id @default(cuid())
+  practiceId           String
+  ehrSource            EhrSource
+  reportMonth          Int
+  reportYear           Int
+  status               BatchStatus @default(OPEN)
+  uploadedById         String
+  uploadedAt           DateTime    @default(now())
+  closedById           String?
+  closedAt             DateTime?
+  targetCompletionDate DateTime?
+  totalClaims          Int         @default(0)
+  totalBalance         Decimal     @default(0) @db.Decimal(14, 2)
+  /// SimplePractice only — its export has no insurance column, so the PM
+  /// supplies one insurance name for the whole batch at upload time.
+  insuranceName        String?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  practice   Practice  @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+  uploadedBy User      @relation("ArBatchUploadedBy", fields: [uploadedById], references: [id])
+  closedBy   User?     @relation("ArBatchClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  claims     ArClaim[]
+
+  @@index([practiceId, status])
+  @@index([status])
+  @@index([reportYear, reportMonth])
+  @@index([uploadedById])
+  @@index([closedById])
+  @@map("ar_batches")
+}
+
+model ArClaim {
+  id            String   @id @default(cuid())
+  batchId       String
+  patientName   String
+  patientId     String?
+  insuranceName String
+  subscriberId  String?
+  claimNumber   String?
+  dateOfService DateTime
+  cptCode       String?
+
+  billedAmount  Decimal? @db.Decimal(12, 2)
+  insurancePaid Decimal? @db.Decimal(12, 2)
+  patientPaid   Decimal? @db.Decimal(12, 2)
+  balance       Decimal  @db.Decimal(12, 2)
+
+  /// Taken straight from ECW; calculated from DOS for every other EHR.
+  /// Stored as a static snapshot at import time — it does not drift.
+  agingDays Int
+
+  providerName      String?
+  billingProvider   String?
+  renderingProvider String?
+  location          String?
+
+  statusCategory StatusCategory @default(RED)
+  statusLabel    String         @default("Pending")
+  assignedToId   String?
+  followUpDate   DateTime?
+
+  /// Raw EHR values kept for traceability back to the source report.
+  ehrClaimStatus String?
+  ehrTags        String?
+
+  lastWorkedAt   DateTime?
+  lastWorkedById String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  eobEntries   EobEntry[]
+  batch        ArBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  assignedTo   User?        @relation("ArClaimAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  lastWorkedBy User?        @relation("ArClaimLastWorkedBy", fields: [lastWorkedById], references: [id], onDelete: SetNull)
+  workNotes    ArWorkNote[]
+
+  @@index([batchId])
+  @@index([assignedToId, statusCategory])
+  @@index([statusCategory])
+  @@index([followUpDate])
+  @@index([agingDays])
+  @@index([insuranceName])
+  @@index([patientName])
+  @@map("ar_claims")
+}
+
+/// ADD-ONLY: append-only work log. Never add update or delete operations
+/// against this model, and never expose PUT, PATCH or DELETE for it.
+/// Corrections are made by appending a superseding note.
+model ArWorkNote {
+  id                      String         @id @default(cuid())
+  claimId                 String
+  outcomeType             OutcomeType
+  structuredFields        Json
+  generatedNote           String
+  additionalNotes         String?
+  statusChangedTo         String
+  statusCategoryChangedTo StatusCategory
+  assignedToChangedId     String?
+  followUpDateSet         DateTime?
+  workedById              String
+  workedAt                DateTime       @default(now())
+
+  claim             ArClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  workedBy          User    @relation("ArWorkNoteWorkedBy", fields: [workedById], references: [id])
+  assignedToChanged User?   @relation("ArWorkNoteAssignedTo", fields: [assignedToChangedId], references: [id], onDelete: SetNull)
+
+  @@index([claimId, workedAt])
+  @@index([workedById, workedAt])
+  @@map("ar_work_notes")
+}
+
+/// Self-populating list of denial reasons. Matched case-insensitively at the
+/// API layer; `reason` is stored in the casing it was first entered with.
+model ArDenialReason {
+  id         String    @id @default(cuid())
+  reason     String    @unique
+  usageCount Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  lastUsedAt DateTime?
+
+  @@index([usageCount])
+  @@map("ar_denial_reasons")
+}
+
+/**
+ * ========================================================================== *
+ * Module 2 — EOB/ERA Denial & Rejection                                     *
+ * ==========================================================================
+ */
+
+enum EobEntryType {
+  DENIAL
+  REJECTION
+}
+
+/// One posted ERA/EOB remittance for a practice.
+model EobBatch {
+  id             String   @id @default(cuid())
+  practiceId     String
+  /// Date the ERA/EOB was received, not when it was keyed in.
+  batchDate      DateTime
+  batchReference String?
+  payerName      String
+  totalAmount    Decimal  @db.Decimal(14, 2)
+  postedById     String
+  postedAt       DateTime @default(now())
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  practice Practice   @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+  postedBy User       @relation("EobBatchPostedBy", fields: [postedById], references: [id])
+  entries  EobEntry[]
+
+  @@index([practiceId, batchDate])
+  @@index([payerName])
+  @@index([postedById])
+  @@map("eob_batches")
+}
+
+model EobEntry {
+  id              String       @id @default(cuid())
+  eobBatchId      String
+  entryType       EobEntryType
+  patientName     String
+  claimNumber     String?
+  dateOfService   DateTime
+  cptCode         String?
+  billedAmount    Decimal?     @db.Decimal(12, 2)
+  deniedAmount    Decimal?     @db.Decimal(12, 2)
+  denialCode      String?
+  denialReason    String
+  rejectionReason String?
+  actionRequired  String?
+
+  statusCategory StatusCategory @default(RED)
+  statusLabel    String         @default("Pending Review")
+  assignedToId   String?
+
+  resolvedAt     DateTime?
+  resolvedById   String?
+  resolutionNote String?
+
+  /// Optional link back to the AR claim this denial belongs to.
+  arClaimId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  batch      EobBatch      @relation(fields: [eobBatchId], references: [id], onDelete: Cascade)
+  assignedTo User?         @relation("EobEntryAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  resolvedBy User?         @relation("EobEntryResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  arClaim    ArClaim?      @relation(fields: [arClaimId], references: [id], onDelete: SetNull)
+  workNotes  EobWorkNote[]
+
+  @@index([eobBatchId])
+  @@index([assignedToId, statusCategory])
+  @@index([statusCategory])
+  @@index([entryType])
+  @@index([dateOfService])
+  @@map("eob_entries")
+}
+
+/// ADD-ONLY: append-only work log. Never add update or delete operations
+/// against this model, and never expose PUT, PATCH or DELETE for it.
+model EobWorkNote {
+  id                      String         @id @default(cuid())
+  entryId                 String
+  note                    String
+  statusChangedTo         String
+  statusCategoryChangedTo StatusCategory
+  assignedToChangedId     String?
+  workedById              String
+  workedAt                DateTime       @default(now())
+
+  entry             EobEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  workedBy          User     @relation("EobWorkNoteWorkedBy", fields: [workedById], references: [id])
+  assignedToChanged User?    @relation("EobWorkNoteAssignedTo", fields: [assignedToChangedId], references: [id], onDelete: SetNull)
+
+  @@index([entryId, workedAt])
+  @@index([workedById, workedAt])
+  @@map("eob_work_notes")
+}
+
+/**
+ * ========================================================================== *
+ * Module 3 — Project Management Tracker                                     *
+ * ==========================================================================
+ */
+
+enum LockStatus {
+  DRAFT
+  LOCKED
+}
+
+/// One health-scoring record per practice per month.
+/// Derived fields and scores are always recomputed server-side on save —
+/// nothing here is trusted from the client.
+model TrackerEntry {
+  id              String   @id @default(cuid())
+  practiceId      String
+  /// First day of the month the entry covers, at UTC midnight.
+  monthYear       DateTime
+  enteredById     String
+  lastUpdatedById String?
+
+  // Volume
+  totalAppointments Int?
+  totalVisits       Int?
+  totalClaims       Int?
+
+  // Financial
+  totalCharges      Decimal? @db.Decimal(14, 2)
+  totalPayments     Decimal? @db.Decimal(14, 2)
+  totalAdjustments  Decimal? @db.Decimal(14, 2)
+  netCollectionRate Decimal? @db.Decimal(6, 4)
+  paymentEfficiency Decimal? @db.Decimal(6, 4)
+
+  // Owner-entered replacements for the two calculated rates above. Null means
+  // "use the calculation"; scoring reads the manual value whenever it is set.
+  netCollectionRateManual Decimal? @db.Decimal(6, 4)
+  paymentEfficiencyManual Decimal? @db.Decimal(6, 4)
+
+  // Billing pipeline
+  pendingClaimsToBill          Int?
+  pendingEraToPost             Int?
+  pendingPatientPaymentsToPost Int?
+
+  // Rejections and denials
+  rejectionsReceived    Int?
+  outstandingRejections Int?
+  eobDenialsReceived    Int?
+  outstandingEobDenials Int?
+  denialRate            Decimal? @db.Decimal(6, 4)
+
+  // AR aging
+  arCount0to30    Int?
+  arAmount0to30   Decimal? @db.Decimal(14, 2)
+  arCount31to60   Int?
+  arAmount31to60  Decimal? @db.Decimal(14, 2)
+  arCount61to90   Int?
+  arAmount61to90  Decimal? @db.Decimal(14, 2)
+  arCount90plus   Int?
+  arAmount90plus  Decimal? @db.Decimal(14, 2)
+  totalAr         Decimal? @db.Decimal(14, 2)
+  arPercentOver90 Decimal? @db.Decimal(6, 4)
+
+  // Follow-up compliance, stored 0–1
+  followUpCompliance Decimal? @db.Decimal(6, 4)
+
+  // Eligibility
+  totalAppointmentsForElig Int?
+  eligibilityCompleted     Int?
+  eligibilityCompliance    Decimal? @db.Decimal(6, 4)
+
+  // Compliance setup, each stored 0–1
+  eftEnrollment Decimal? @db.Decimal(6, 4)
+  eraEnrollment Decimal? @db.Decimal(6, 4)
+  portalAccess  Decimal? @db.Decimal(6, 4)
+  feeSchedule   Decimal? @db.Decimal(6, 4)
+  sopCompliance Decimal? @db.Decimal(6, 4)
+
+  // Team and management
+  resourcesAssigned         Decimal? @db.Decimal(6, 2)
+  monthlyReviewMeeting      Boolean?
+  directClientCommunication String?
+
+  // Scores
+  scoreA     Int?
+  scoreB     Int?
+  scoreC     Int?
+  scoreD     Int?
+  scoreE     Int?
+  scoreF     Int?
+  scoreG     Int?
+  scoreH     Int?
+  finalScore Decimal? @db.Decimal(6, 2)
+
+  lockStatus LockStatus @default(DRAFT)
+  lockedAt   DateTime?
+  lockedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  practice      Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+  enteredBy     User     @relation("TrackerEnteredBy", fields: [enteredById], references: [id])
+  lastUpdatedBy User?    @relation("TrackerUpdatedBy", fields: [lastUpdatedById], references: [id], onDelete: SetNull)
+  lockedBy      User?    @relation("TrackerLockedBy", fields: [lockedById], references: [id], onDelete: SetNull)
+
+  @@unique([practiceId, monthYear])
+  @@index([monthYear])
+  @@index([lockStatus])
+  @@map("tracker_entries")
+}
+
+/**
+ * ========================================================================== *
+ * Module 4 — To Do Management                                               *
+ * ==========================================================================
+ */
+
+enum TodoPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TodoStatus {
+  OPEN
+  IN_PROCESS
+  HOLD
+  CLOSED
+}
+
+/// Same states as TodoStatus, kept separate so the two systems can diverge.
+enum TaskStatus {
+  OPEN
+  IN_PROCESS
+  HOLD
+  CLOSED
+}
+
+enum TimeBlockType {
+  FIXED
+  TODO_WORK
+  BREAK
+  MEETING
+}
+
+model Todo {
+  id              String  @id @default(cuid())
+  title           String
+  description     String?
+  /// Null for general tasks not tied to one practice.
+  practiceId      String?
+  createdById     String
+  assignedToId    String
+  /// Delegated to a second person. Both they and the assignee keep it in
+  /// their list, each labelled with the other's name.
+  subAssignedToId String?
+
+  /// The day the assignee plans to work on this, not a hard deadline.
+  dueDate          DateTime?
+  estimatedMinutes Int?
+  priority         TodoPriority @default(MEDIUM)
+  status           TodoStatus   @default(OPEN)
+
+  /// Set when status is HOLD; the task returns to OPEN on this date.
+  holdReleaseDate DateTime?
+  /// When true the creator keeps it in their list after assigning it out.
+  isShared        Boolean   @default(false)
+
+  completedAt   DateTime?
+  completedById String?
+
+  isRecurring     Boolean @default(false)
+  /// { frequency, daysOfWeek?, dayOfMonth?, endDate? }
+  recurringConfig Json?
+  /// Set on generated instances, pointing at the template todo.
+  parentTodoId    String?
+
+  tags String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  practice      Practice?  @relation(fields: [practiceId], references: [id], onDelete: SetNull)
+  createdBy     User       @relation("TodoCreatedBy", fields: [createdById], references: [id])
+  assignedTo    User       @relation("TodoAssignedTo", fields: [assignedToId], references: [id])
+  completedBy   User?      @relation("TodoCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  subAssignedTo User?      @relation("TodoSubAssignedTo", fields: [subAssignedToId], references: [id], onDelete: SetNull)
+  parentTodo    Todo?      @relation("TodoRecurrence", fields: [parentTodoId], references: [id], onDelete: Cascade)
+  instances     Todo[]     @relation("TodoRecurrence")
+  notes         TodoNote[]
+
+  @@index([assignedToId, status, dueDate])
+  @@index([createdById])
+  @@index([practiceId])
+  @@index([dueDate])
+  @@index([parentTodoId])
+  @@index([status, holdReleaseDate])
+  @@index([subAssignedToId])
+  @@map("todos")
+}
+
+/// Task Management — every role. Separate from To Do, which is Owner/PM only.
+model Task {
+  id           String  @id @default(cuid())
+  title        String
+  description  String?
+  practiceId   String?
+  createdById  String
+  assignedToId String
+  /// Optional classification from the owner-managed TaskType list.
+  taskTypeId   String?
+
+  dueDate          DateTime?
+  estimatedMinutes Int?
+  /// Filled in when the task is closed, so estimates can be checked.
+  actualMinutes    Int?
+  priority         TodoPriority @default(MEDIUM)
+  status           TaskStatus   @default(OPEN)
+
+  /// Required when status is HOLD; the task returns to OPEN on this date.
+  holdReleaseDate DateTime?
+
+  completedAt   DateTime?
+  completedById String?
+
+  /// The creator keeps sight of a task after assigning it to someone else.
+  isVisibleToCreator Boolean @default(true)
+
+  /// Recurrence uses a parent/instance pattern: the parent holds the config
+  /// and never appears in a work queue, each occurrence is a child Task.
+  isRecurring     Boolean @default(false)
+  /// { frequency, daysOfWeek?, dayOfMonth?, nextDueDate, endDate? }
+  recurringConfig Json?
+  /// Set on child instances, pointing at the parent that generated them.
+  parentTaskId    String?
+  /// Which occurrence this is: 1 for the first, 2 for the second, and so on.
+  instanceNumber  Int?
+
+  tags String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  practice    Practice?  @relation(fields: [practiceId], references: [id], onDelete: SetNull)
+  createdBy   User       @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  assignedTo  User       @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
+  completedBy User?      @relation("TaskCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  taskType    TaskType?  @relation(fields: [taskTypeId], references: [id], onDelete: SetNull)
+  parentTask  Task?      @relation("TaskRecurrence", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  instances   Task[]     @relation("TaskRecurrence")
+  notes       TaskNote[]
+
+  @@index([assignedToId, status, dueDate])
+  @@index([createdById])
+  @@index([practiceId])
+  @@index([status, holdReleaseDate])
+  @@index([parentTaskId])
+  @@index([taskTypeId])
+  @@map("tasks")
+}
+
+/// Owner-managed classification for tasks. Deactivating hides a type from the
+/// pickers without rewriting the tasks that already carry it.
+model TaskType {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks Task[]
+
+  @@index([isActive, sortOrder])
+  @@map("task_types")
+}
+
+model TaskNote {
+  id              String      @id @default(cuid())
+  taskId          String
+  note            String
+  statusChangedTo TaskStatus?
+  addedById       String
+  addedAt         DateTime    @default(now())
+
+  task    Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  addedBy User @relation("TaskNoteAddedBy", fields: [addedById], references: [id])
+
+  @@index([taskId, addedAt])
+  @@map("task_notes")
+}
+
+model TodoNote {
+  id        String   @id @default(cuid())
+  todoId    String
+  note      String
+  addedById String
+  addedAt   DateTime @default(now())
+
+  todo    Todo @relation(fields: [todoId], references: [id], onDelete: Cascade)
+  addedBy User @relation("TodoNoteAddedBy", fields: [addedById], references: [id])
+
+  @@index([todoId, addedAt])
+  @@map("todo_notes")
+}
+
+/// A slot in someone's standard working day. Weekly blocks repeat by
+/// dayOfWeek; a specificDate block overrides the weekly template for one day.
+model TimeBlock {
+  id           String        @id @default(cuid())
+  userId       String
+  dayOfWeek    Int?
+  specificDate DateTime?
+  /// "09:00" / "17:30", 24-hour.
+  startTime    String
+  endTime      String
+  label        String
+  blockType    TimeBlockType @default(TODO_WORK)
+  color        String?
+  isActive     Boolean       @default(true)
+
+  /// Set on a specific-date row that replaces a weekly-template block for that
+  /// one day. Null means a standalone one-off block (or a template row itself).
+  overridesBlockId String?
+  /// A hidden override removes the template block from that date entirely,
+  /// rather than replacing it. Editing today never rewrites the weekly plan.
+  isHidden         Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user           User        @relation("TimeBlockUser", fields: [userId], references: [id], onDelete: Cascade)
+  overridesBlock TimeBlock?  @relation("TimeBlockOverride", fields: [overridesBlockId], references: [id], onDelete: Cascade)
+  overrides      TimeBlock[] @relation("TimeBlockOverride")
+
+  @@index([userId, dayOfWeek])
+  @@index([userId, specificDate])
+  @@index([overridesBlockId])
+  @@map("time_blocks")
+}
+
+/// Owner-editable scoring configuration: weights and score bands.
+/// Keyed rows rather than columns so a new setting needs no migration.
+model TrackerConfig {
+  id          String   @id @default(cuid())
+  configKey   String   @unique
+  configValue Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  updatedBy User? @relation("TrackerConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("tracker_config")
+}
