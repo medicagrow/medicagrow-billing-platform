@@ -2,25 +2,15 @@
 
 import type { InputHTMLAttributes } from "react";
 import { inputClassName } from "@/components/ui/Input";
+import { formatPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 
-/** Digits only, max 10 (US NANP, leading country code dropped). */
-export function phoneDigits(raw: string) {
-  const digits = raw.replace(/\D/g, "");
-  const national = digits.length === 11 && digits.startsWith("1")
-    ? digits.slice(1)
-    : digits;
-  return national.slice(0, 10);
-}
-
-/** 8004562583 -> 800-456-2583 */
-export function formatPhone(raw: string) {
-  const digits = phoneDigits(raw);
-
-  if (digits.length <= 3) return digits;
-  if (digits.length <= 6) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
-  return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
-}
+/**
+ * `formatPhone` and `phoneDigits` live in [lib/phone.ts](../../lib/phone.ts),
+ * not here, and are deliberately **not re-exported**. Re-exporting them would
+ * let a server component import them across the client boundary, where they
+ * arrive as client references rather than functions and throw when called.
+ */
 
 type PhoneInputProps = Omit<
   InputHTMLAttributes<HTMLInputElement>,

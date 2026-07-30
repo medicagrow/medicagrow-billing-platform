@@ -9,10 +9,10 @@ import {
 import { Badge } from "@/components/ui/Badge";
 import { canManageBatches } from "@/lib/ar-access";
 import { Role } from "@/lib/generated/prisma/enums";
+import { formatPhone } from "@/lib/phone";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { displayEin, displayZip } from "@/lib/validations/identifiers";
-import { formatPhone } from "@/components/ui/PhoneInput";
 
 export const metadata: Metadata = { title: "Practice Detail" };
 export const dynamic = "force-dynamic";
