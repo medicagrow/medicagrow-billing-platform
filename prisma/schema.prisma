@@ -95,7 +95,13 @@ model User {
   tasksCreated   Task[]     @relation("TaskCreatedBy")
   tasksAssigned  Task[]     @relation("TaskAssignedTo")
   tasksCompleted Task[]     @relation("TaskCompletedBy")
+  tasksTiming    Task[]     @relation("TaskActiveTimerUser")
   taskNotes      TaskNote[] @relation("TaskNoteAddedBy")
+
+  taskTimeLogs         TaskTimeLog[]         @relation("TaskTimeLogUser")
+  taskTimeLogsApproved TaskTimeLog[]         @relation("TaskTimeLogApprovedBy")
+  timeEditsRequested   TaskTimeEditRequest[] @relation("TimeEditRequestedBy")
+  timeEditsReviewed    TaskTimeEditRequest[] @relation("TimeEditReviewedBy")
 
   trackerConfigUpdates TrackerConfig[] @relation("TrackerConfigUpdatedBy")
 
@@ -617,7 +623,10 @@ model Todo {
 /// Task Management — every role. Separate from To Do, which is Owner/PM only.
 model Task {
   id           String  @id @default(cuid())
-  title        String
+  /// Legacy. Tasks are identified by their type and practice now — see
+  /// lib/task/task-label.ts. Kept nullable so tasks created with a title
+  /// keep showing it.
+  title        String?
   description  String?
   practiceId   String?
   createdById  String
@@ -651,6 +660,19 @@ model Task {
   /// Which occurrence this is: 1 for the first, 2 for the second, and so on.
   instanceNumber  Int?
 
+  /// Units of work completed, captured when the task is closed. What they
+  /// count depends on the task type — see lib/task/productivity-config.ts.
+  productivityCount  Int?
+  productivityAmount Decimal? @db.Decimal(14, 2)
+
+  /// Sum of every approved TaskTimeLog on this task. Recalculated whenever a
+  /// log stops or an edit is approved, rather than summed on read.
+  totalLoggedMinutes   Int       @default(0)
+  /// Set while a timer runs on this task; both clear when it stops. Only one
+  /// timer per user runs at a time, enforced in the route.
+  activeTimerStartedAt DateTime?
+  activeTimerUserId    String?
+
   tags String[]
 
   createdAt DateTime @default(now())
@@ -665,6 +687,10 @@ model Task {
   instances   Task[]     @relation("TaskRecurrence")
   notes       TaskNote[]
 
+  activeTimerUser User?         @relation("TaskActiveTimerUser", fields: [activeTimerUserId], references: [id], onDelete: SetNull)
+  timeLogs        TaskTimeLog[]
+
+  @@index([activeTimerUserId])
   @@index([assignedToId, status, dueDate])
   @@index([createdById])
   @@index([practiceId])
@@ -672,6 +698,78 @@ model Task {
   @@index([parentTaskId])
   @@index([taskTypeId])
   @@map("tasks")
+}
+
+/// One stretch of time worked on a task.
+///
+/// A log is written when a timer stops. Editing one is a request, not a direct
+/// change: the original duration is preserved on approval so the correction is
+/// visible rather than silent.
+model TaskTimeLog {
+  id     String @id @default(cuid())
+  taskId String
+  userId String
+
+  startedAt       DateTime
+  stoppedAt       DateTime?
+  /// Whole minutes between start and stop, set when the timer stops.
+  durationMinutes Int?
+
+  isEdited                Boolean   @default(false)
+  editRequestedAt         DateTime?
+  editApprovedAt          DateTime?
+  editApprovedById        String?
+  editNote                String?
+  /// What the duration was before an approved edit replaced it.
+  originalDurationMinutes Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task           Task                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user           User                  @relation("TaskTimeLogUser", fields: [userId], references: [id])
+  editApprovedBy User?                 @relation("TaskTimeLogApprovedBy", fields: [editApprovedById], references: [id], onDelete: SetNull)
+  editRequests   TaskTimeEditRequest[]
+
+  @@index([taskId])
+  @@index([userId, startedAt])
+  @@map("task_time_logs")
+}
+
+enum TimeEditRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// A biller's request to correct a time log. Approval is a PM/Owner action —
+/// nobody reviews their own.
+model TaskTimeEditRequest {
+  id            String @id @default(cuid())
+  timeLogId     String
+  requestedById String
+
+  requestedNewStartedAt       DateTime
+  requestedNewStoppedAt       DateTime
+  requestedNewDurationMinutes Int
+  reason                      String
+
+  status       TimeEditRequestStatus @default(PENDING)
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  timeLog     TaskTimeLog @relation(fields: [timeLogId], references: [id], onDelete: Cascade)
+  requestedBy User        @relation("TimeEditRequestedBy", fields: [requestedById], references: [id])
+  reviewedBy  User?       @relation("TimeEditReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([timeLogId])
+  @@index([requestedById])
+  @@map("task_time_edit_requests")
 }
 
 /// Owner-managed classification for tasks. Deactivating hides a type from the

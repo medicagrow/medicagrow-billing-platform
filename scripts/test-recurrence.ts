@@ -213,10 +213,30 @@ async function main() {
   });
 
   check("nine default types are seeded", types.length >= 9, String(types.length));
+  // Order is owner-editable at /settings/task-types, so asserting which
+  // type comes first would fail the moment someone reorders the list. What
+  // must hold is that the nine defaults are all present.
+  const names = new Set(types.map((type) => type.name));
+  const missing = [
+    "Charge Posting",
+    "Payment Posting",
+    "Denial/Rejection Work",
+    "Claim Follow-up",
+    "Authorization",
+    "Eligibility Check",
+    "Report",
+    "Patient Inquiry",
+    "Clinic Inquiry",
+  ].filter((name) => !names.has(name));
+
   check(
-    "Charge Posting sorts first",
-    types[0]?.name === "Charge Posting",
-    types[0]?.name ?? "none",
+    "every default type is present",
+    missing.length === 0,
+    missing.join(", ") || "none missing",
+  );
+  check(
+    "types come back in sortOrder",
+    types.every((type, i) => i === 0 || types[i - 1]!.sortOrder <= type.sortOrder),
   );
 
   // Cleanup — children first, then the parent they cascade from.

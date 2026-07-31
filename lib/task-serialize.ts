@@ -3,6 +3,7 @@ import {
   parseRecurringConfig,
   type RecurringConfig,
 } from "@/lib/task/recurrence-config";
+import { getTaskLabel } from "@/lib/task/task-label";
 
 export interface TaskNoteDto {
   id: string;
@@ -15,7 +16,10 @@ export interface TaskNoteDto {
 
 export interface TaskDto {
   id: string;
-  title: string;
+  /** Legacy; prefer getTaskLabel() from lib/task/task-label.ts. */
+  title: string | null;
+  /** Type and practice, or the old title — what the row is called on screen. */
+  label: string;
   description: string | null;
   practiceId: string | null;
   practiceName: string | null;
@@ -28,6 +32,15 @@ export interface TaskDto {
   dueDate: string | null;
   estimatedMinutes: number | null;
   actualMinutes: number | null;
+
+  totalLoggedMinutes: number;
+  activeTimerStartedAt: string | null;
+  activeTimerUserId: string | null;
+  activeTimerUserName: string | null;
+
+  productivityCount: number | null;
+  /** Decimal, as a string end to end. */
+  productivityAmount: string | null;
   priority: TodoPriority;
   status: TaskStatus;
   holdReleaseDate: string | null;
@@ -59,7 +72,7 @@ type TaskNoteRow = {
 
 type TaskRow = {
   id: string;
-  title: string;
+  title: string | null;
   description: string | null;
   practiceId: string | null;
   taskTypeId: string | null;
@@ -68,6 +81,11 @@ type TaskRow = {
   dueDate: Date | null;
   estimatedMinutes: number | null;
   actualMinutes: number | null;
+  totalLoggedMinutes?: number;
+  activeTimerStartedAt?: Date | null;
+  activeTimerUserId?: string | null;
+  productivityCount?: number | null;
+  productivityAmount?: unknown;
   priority: TodoPriority;
   status: TaskStatus;
   holdReleaseDate: Date | null;
@@ -83,7 +101,8 @@ type TaskRow = {
   createdBy?: { name: string } | null;
   assignedTo?: { name: string } | null;
   completedBy?: { name: string } | null;
-  parentTask?: { title: string } | null;
+  activeTimerUser?: { name: string } | null;
+  parentTask?: { title: string | null; taskType?: { name: string } | null } | null;
   notes?: TaskNoteRow[];
   _count?: { notes: number; instances?: number } | null;
 };
@@ -103,6 +122,11 @@ export function toTaskDto(task: TaskRow): TaskDto {
   return {
     id: task.id,
     title: task.title,
+    label: getTaskLabel({
+      title: task.title,
+      taskTypeName: task.taskType?.name ?? null,
+      practiceName: task.practice?.name ?? null,
+    }),
     description: task.description,
     practiceId: task.practiceId,
     practiceName: task.practice?.name ?? null,
@@ -115,6 +139,15 @@ export function toTaskDto(task: TaskRow): TaskDto {
     dueDate: task.dueDate?.toISOString() ?? null,
     estimatedMinutes: task.estimatedMinutes,
     actualMinutes: task.actualMinutes,
+    totalLoggedMinutes: task.totalLoggedMinutes ?? 0,
+    activeTimerStartedAt: task.activeTimerStartedAt?.toISOString() ?? null,
+    activeTimerUserId: task.activeTimerUserId ?? null,
+    activeTimerUserName: task.activeTimerUser?.name ?? null,
+    productivityCount: task.productivityCount ?? null,
+    productivityAmount:
+      task.productivityAmount === null || task.productivityAmount === undefined
+        ? null
+        : String(task.productivityAmount),
     priority: task.priority,
     status: task.status,
     holdReleaseDate: task.holdReleaseDate?.toISOString() ?? null,
@@ -124,7 +157,12 @@ export function toTaskDto(task: TaskRow): TaskDto {
     isRecurring: task.isRecurring,
     recurringConfig: parseRecurringConfig(task.recurringConfig),
     parentTaskId: task.parentTaskId,
-    parentTaskTitle: task.parentTask?.title ?? null,
+    parentTaskTitle: task.parentTask
+      ? getTaskLabel({
+          title: task.parentTask.title,
+          taskTypeName: task.parentTask.taskType?.name ?? null,
+        })
+      : null,
     instanceNumber: task.instanceNumber,
     instanceCount: task._count?.instances ?? 0,
     tags: task.tags,
@@ -139,7 +177,8 @@ export const TASK_INCLUDE = {
   createdBy: { select: { name: true } },
   assignedTo: { select: { name: true } },
   completedBy: { select: { name: true } },
-  parentTask: { select: { title: true } },
+  activeTimerUser: { select: { name: true } },
+  parentTask: { select: { title: true, taskType: { select: { name: true } } } },
   _count: { select: { notes: true, instances: true } },
 } as const;
 

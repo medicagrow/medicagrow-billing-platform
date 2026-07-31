@@ -1,4 +1,5 @@
 import { TaskStatus, TodoStatus } from "@/lib/generated/prisma/enums";
+import { getTaskLabel } from "@/lib/task/task-label";
 import { prisma } from "@/lib/prisma";
 import {
   WORK_ACTIVITIES,
@@ -203,6 +204,7 @@ export async function getWorkRecentActivity(
         title: true,
         completedAt: true,
         practice: { select: { name: true } },
+        taskType: { select: { name: true } },
       },
     }),
     prisma.todo.findMany({
@@ -225,8 +227,8 @@ export async function getWorkRecentActivity(
       module: "TASK" as const,
       workedAt: task.completedAt?.toISOString() ?? "",
       recordId: task.id,
-      recordLabel: task.title,
-      recordUrl: `/tasks/list?search=${encodeURIComponent(task.title)}`,
+      recordLabel: getTaskLabel(task),
+      recordUrl: `/tasks/list?search=${encodeURIComponent(getTaskLabel(task))}`,
       practiceName: task.practice?.name ?? "—",
       outcomeType: null,
       statusChangedTo: "Closed",
