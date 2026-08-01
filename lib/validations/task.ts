@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
-import { dateStringSchema } from "@/lib/validations/common";
+import {
+  dateStringSchema,
+  nonNegativeDecimalSchema,
+} from "@/lib/validations/common";
 
 const optionalText = (max: number) =>
   z
@@ -30,10 +33,10 @@ const requiresDays = (config: z.infer<typeof recurringConfigSchema>) =>
 
 export const createTaskSchema = z
   .object({
-    title: z.string().trim().min(1, "A title is required").max(200),
+    // Tasks are identified by their type and practice, not a typed-in title.
     description: optionalText(4000),
     practiceId: optionalText(40),
-    taskTypeId: optionalText(40),
+    taskTypeId: z.string().min(1, "Please select a task type"),
     assignedToId: z.string().min(1, "Assignee is required"),
     dueDate: dateStringSchema.optional(),
     estimatedMinutes: z.coerce.number().int().min(0).max(1440).optional(),
@@ -92,6 +95,15 @@ export const updateTaskSchema = z
     status: z.enum(TaskStatus).optional(),
     holdReleaseDate: dateStringSchema.nullable().optional(),
     isVisibleToCreator: z.boolean().optional(),
+    /** Units of work completed, captured when the task is closed. */
+    productivityCount: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(1000000)
+      .nullable()
+      .optional(),
+    productivityAmount: nonNegativeDecimalSchema.nullable().optional(),
     isRecurring: z.boolean().optional(),
     recurringConfig: recurringConfigSchema.nullable().optional(),
     tags: z.array(z.string().trim().max(40)).max(10).optional(),
@@ -122,7 +134,7 @@ export const listTasksQuerySchema = z.object({
   priority: z.enum(TodoPriority).optional(),
   practiceId: z.string().optional(),
   taskTypeId: z.string().optional(),
-  /** Substring match on the title. */
+  /** Substring match on the title, kept for older titled tasks. */
   search: z.string().optional(),
   tag: z.string().optional(),
   from: z.string().optional(),

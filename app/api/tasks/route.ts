@@ -135,7 +135,6 @@ export async function POST(request: NextRequest) {
 
   const task = await prisma.task.create({
     data: {
-      title: input.title,
       description: input.description ?? null,
       practiceId: input.practiceId ?? null,
       taskTypeId: input.taskTypeId ?? null,

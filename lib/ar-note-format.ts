@@ -19,8 +19,8 @@ export interface NoteFields {
   howChecked?: string;
 
   // Paid
-  eraDate?: string;
   amountPaid?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   allowedAmount?: string;
   paymentDate?: string;
   copayAmount?: string;
@@ -37,28 +37,37 @@ export interface NoteFields {
   denialDetail?: string;
   actionTaken?: string;
   actionDetail?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   appealDeadline?: string;
 
   // No claim on file / In process
   checkedDate?: string;
   expectedResolution?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   expectedPaymentDate?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   timelyFilingDeadline?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   resubmissionDate?: string;
 
   // Patient responsibility
   coinsuranceAmount?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   patientBalance?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   statementSentDate?: string;
 
   // Check with office
   whatIsNeeded?: string;
   urgency?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   neededByDate?: string;
 
   // Write off
   writeOffAmount?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   writeOffType?: string;
+  /** @deprecated no longer collected; present in older saved notes. */
   approvedBy?: string;
   reason?: string;
 }
@@ -81,6 +90,23 @@ const money = (input?: string) => {
 };
 
 /**
+ * Dates reach a note as MM/DD/YYYY, never ISO.
+ *
+ * Date inputs hand back YYYY-MM-DD, which is unreadable in a note a biller
+ * pastes into a payer portal. Anything already in MM/DD/YYYY, or in a shape
+ * this does not recognise, is passed through untouched.
+ */
+export function noteDate(input?: string): string | undefined {
+  const text = value(input);
+  if (text === undefined) return undefined;
+
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`;
+
+  return text;
+}
+
+/**
  * "Sw John Ref#123 Ph#800-456-2583."
  *
  * Parts left empty are omitted, which is also how the How Checked gating
@@ -96,9 +122,15 @@ function contactSentence(fields: NoteFields): string {
   return parts.length > 0 ? `${parts.join(" ")}.` : "";
 }
 
-function checkedSentence(fields: NoteFields): string {
+/**
+ * How the claim was checked — "Checked via Portal."
+ *
+ * "via", not "on": "Checked on" is reserved for the checked *date*, and having
+ * both produced two sentences that read like duplicate dates.
+ */
+function howCheckedSentence(fields: NoteFields): string {
   const how = value(fields.howChecked);
-  return how ? `Checked on ${how}.` : "";
+  return how ? `Checked via ${how}.` : "";
 }
 
 /** The biller's entry wins; otherwise fall back to the claim's stored number. */
@@ -108,9 +140,10 @@ function claimPrefix(fields: NoteFields, context: NoteContext): string {
   return claimNumber ? `Claim#${claimNumber}, ` : "";
 }
 
+/** The one place the claim-received date is stated. */
 function receivedByInsurance(fields: NoteFields): string {
-  const date = value(fields.claimReceivedDate);
-  return date ? `Received by insurance on ${date}.` : "";
+  const date = noteDate(fields.claimReceivedDate);
+  return date ? `Claim received by ins. on ${date}.` : "";
 }
 
 /** Joins sentence fragments, dropping empties and collapsing whitespace. */
@@ -130,92 +163,73 @@ export function generateNote(
   context: NoteContext = {},
 ): string {
   const contact = contactSentence(fields);
-  const checked = checkedSentence(fields);
+  const howChecked = howCheckedSentence(fields);
   const prefix = claimPrefix(fields, context);
   const received = receivedByInsurance(fields);
 
   switch (outcomeType) {
     case OutcomeType.PAID: {
       const amount = money(fields.amountPaid) ?? blank;
-      const era = value(fields.eraDate) ?? blank;
+      const paidOn = noteDate(fields.paymentDate) ?? blank;
       const copay = money(fields.copayAmount);
-      const allowed = money(fields.allowedAmount);
+      const deductible = money(fields.deductibleAmount);
       const paymentType = value(fields.paymentType) ?? blank;
       const paymentNumber = value(fields.paymentNumber) ?? blank;
       const scope = value(fields.paymentScope) ?? "Single";
       const bulkTotal = money(fields.bulkTotalAmount);
-      const paidOn = value(fields.paymentDate);
 
       const copayClause = copay ? ` with ${copay} Copay` : "";
-      const allowedClause = allowed ? ` (allowed ${allowed})` : "";
+      const deductibleClause = deductible ? ` and ${deductible} Deductible` : "";
       const bulkClause = scope === "Bulk" && bulkTotal ? ` of ${bulkTotal}` : "";
 
       return join(
         `${prefix}${received}`,
-        `Received on ${era} and Paid ${amount}${copayClause}${allowedClause} on ${era} via ${paymentType}# ${paymentNumber} as ${scope} payment${bulkClause}.`,
-        paidOn ? `Payment dated ${paidOn}.` : undefined,
+        `Paid/Finalized on ${paidOn} for ${amount}${copayClause}${deductibleClause} via ${paymentType}# ${paymentNumber} as ${scope} payment${bulkClause}.`,
         contact,
-        checked,
+        howChecked,
       );
     }
 
     case OutcomeType.DENIED: {
-      const era = value(fields.eraDate) ?? blank;
-      const denialDate = value(fields.denialDate);
+      const denialDate = noteDate(fields.denialDate) ?? blank;
       const denialCode = value(fields.denialCode);
       const denialReason = value(fields.denialReason) ?? blank;
       const denialDetail = value(fields.denialDetail);
       const action = value(fields.actionTaken);
       const actionDetail = value(fields.actionDetail);
-      const appealDeadline = value(fields.appealDeadline);
 
       const actionText =
         action === "Other" && actionDetail ? actionDetail : action;
 
       return join(
         `${prefix}${received}`,
-        `Received on ${era} and Denied for ${denialReason}.`,
-        denialDate ? `Denial issued ${denialDate}.` : undefined,
+        `Denied on ${denialDate} for ${denialReason}.`,
         denialCode ? `Denial code ${denialCode}.` : undefined,
         denialDetail ? `${denialDetail}.` : undefined,
         actionText ? `${actionText}.` : undefined,
-        appealDeadline ? `Appeal deadline ${appealDeadline}.` : undefined,
         contact,
-        checked,
+        howChecked,
       );
     }
 
     case OutcomeType.NO_CLAIM_ON_FILE: {
+      const checkedOn = noteDate(fields.checkedDate);
       const action = value(fields.actionTaken);
-      const timelyFiling = value(fields.timelyFilingDeadline);
-      const resubmitted = value(fields.resubmissionDate);
-
-      // "Resubmitted" + a resubmission date read as one statement, not two.
-      const actionClause = action
-        ? resubmitted
-          ? `${action} ${resubmitted}.`
-          : `${action}.`
-        : resubmitted
-          ? `Resubmitted ${resubmitted}.`
-          : undefined;
 
       return join(
         `${prefix}No claim on file.`,
-        received,
+        checkedOn ? `Checked on ${checkedOn}.` : undefined,
+        action ? `${action}.` : undefined,
         contact,
-        checked,
-        actionClause,
-        timelyFiling ? `Timely filing deadline ${timelyFiling}.` : undefined,
+        howChecked,
       );
     }
 
     case OutcomeType.PATIENT_RESPONSIBILITY: {
-      const era = value(fields.eraDate) ?? blank;
+      const finalizedOn = noteDate(fields.paymentDate) ?? blank;
       const deductible = money(fields.deductibleAmount);
       const copay = money(fields.copayAmount);
       const coinsurance = money(fields.coinsuranceAmount);
-      const patientBalance = money(fields.patientBalance);
-      const statementSent = value(fields.statementSentDate);
 
       const responsibility = [
         deductible ? `${deductible} Deductible` : undefined,
@@ -228,63 +242,57 @@ export function generateNote(
 
       return join(
         `${prefix}${received}`,
-        `Received on ${era} and Paid $0.00${responsibilityClause}.`,
-        patientBalance ? `Patient balance ${patientBalance}.` : undefined,
-        statementSent ? `Statement sent ${statementSent}.` : undefined,
+        `Paid/Finalized on ${finalizedOn} as patient responsibility${responsibilityClause}.`,
         contact,
-        checked,
+        howChecked,
       );
     }
 
     case OutcomeType.IN_PROCESS: {
-      const date = value(fields.checkedDate) ?? blank;
+      const checkedOn = noteDate(fields.checkedDate) ?? blank;
       const expected = value(fields.expectedResolution);
-      const expectedPayment = value(fields.expectedPaymentDate);
 
       return join(
         `${prefix}${received}`,
-        `Checked on ${date} — In Process${expected ? `. Expected: ${expected}` : ""}.`,
-        expectedPayment ? `Expected payment ${expectedPayment}.` : undefined,
+        `Checked on ${checkedOn} — In Process.`,
+        expected ? `TAT: ${expected}.` : undefined,
         contact,
-        checked,
+        howChecked,
       );
     }
 
     case OutcomeType.CHECK_WITH_OFFICE: {
       const needed = value(fields.whatIsNeeded) ?? blank;
       const urgent = value(fields.urgency) === "Urgent";
-      const neededBy = value(fields.neededByDate);
 
       return join(
         `${prefix}Check with office — ${needed}.`,
-        neededBy ? `Needed by ${neededBy}.` : undefined,
         urgent ? "URGENT." : undefined,
-        received,
-        contact,
-        checked,
       );
     }
 
     case OutcomeType.WRITE_OFF: {
       const amount = money(fields.writeOffAmount) ?? blank;
       const reason = value(fields.reason) ?? blank;
-      const writeOffType = value(fields.writeOffType);
-      const approvedBy = value(fields.approvedBy);
 
       return join(
         `${prefix}Write off ${amount} — ${reason}.`,
-        writeOffType ? `Type: ${writeOffType}.` : undefined,
-        approvedBy ? `Approved by ${approvedBy}.` : undefined,
-        received,
         contact,
+        howChecked,
       );
     }
 
     case OutcomeType.OTHER:
     default: {
+      const checkedOn = noteDate(fields.checkedDate);
+
       return (
-        join(`${prefix}${received}`.trim(), contact, checked) ||
-        "Claim reviewed."
+        join(
+          `${prefix}${received}`.trim(),
+          checkedOn ? `Checked on ${checkedOn}.` : undefined,
+          contact,
+          howChecked,
+        ) || "Claim reviewed."
       );
     }
   }

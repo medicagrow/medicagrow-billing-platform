@@ -3,14 +3,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { STATUS_LABELS, StatusFields } from "@/components/task/TaskFormFields";
 import { TaskHistory } from "@/components/task/TaskHistory";
+import { TaskTimerPanel } from "@/components/task/TaskTimerPanel";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { DecimalInput } from "@/components/ui/DecimalInput";
 import { FieldError, Input, Label } from "@/components/ui/Input";
 import { NumericInput } from "@/components/ui/inputs/NumericInput";
 import { Select } from "@/components/ui/Select";
 import { useToast } from "@/components/ui/toast";
-import { formatDate } from "@/lib/format";
+import { formatDate, formatUSD } from "@/lib/format";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
+import {
+  AUTO_SOURCE_NOTE,
+  productivityConfigFor,
+} from "@/lib/task/productivity-config";
 import { describeRecurrence } from "@/lib/task/recurrence-config";
 import type { TaskDto, TaskNoteDto } from "@/lib/task-serialize";
 
@@ -23,10 +29,12 @@ import type { TaskDto, TaskNoteDto } from "@/lib/task-serialize";
  */
 export function TaskEditPanel({
   task,
+  currentUserId,
   onSaved,
   onClose,
 }: {
   task: TaskDto;
+  currentUserId: string;
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -42,6 +50,16 @@ export function TaskEditPanel({
     task.actualMinutes === null ? "" : String(task.actualMinutes),
   );
   const [tab, setTab] = useState<"detail" | "history">("detail");
+
+  const [productivityCount, setProductivityCount] = useState(
+    task.productivityCount === null ? "" : String(task.productivityCount),
+  );
+  const [productivityAmount, setProductivityAmount] = useState(
+    task.productivityAmount ?? "",
+  );
+
+  // What "how much got done" means here depends on the task's type.
+  const productivity = productivityConfigFor(task.taskTypeName);
 
   const [notes, setNotes] = useState<TaskNoteDto[]>(task.notes ?? []);
   const [newNote, setNewNote] = useState("");
@@ -84,6 +102,18 @@ export function TaskEditPanel({
           // against work still in flight.
           ...(status === TaskStatus.CLOSED && actualMinutes !== ""
             ? { actualMinutes: Number(actualMinutes) }
+            : {}),
+          // Auto-sourced counts come from the module's own audit trail, so the
+          // panel never posts one.
+          ...(status === TaskStatus.CLOSED &&
+          productivity &&
+          !productivity.autoSourceModule
+            ? {
+                productivityCount:
+                  productivityCount === "" ? null : Number(productivityCount),
+                productivityAmount:
+                  productivityAmount === "" ? null : productivityAmount,
+              }
             : {}),
         }),
       });
@@ -223,6 +253,82 @@ export function TaskEditPanel({
               </Select>
             </div>
           </div>
+
+          <TaskTimerPanel
+            task={task}
+            currentUserId={currentUserId}
+            onChanged={onSaved}
+          />
+
+          {status === TaskStatus.CLOSED && productivity ? (
+            <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                Productivity
+              </p>
+
+              {productivity.autoSourceModule ? (
+                <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900 ring-1 ring-inset ring-sky-200">
+                  {AUTO_SOURCE_NOTE[productivity.autoSourceModule]} — no manual
+                  entry needed.
+                </p>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {productivity.showCount ? (
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`task-${task.id}-prod-count`}>
+                        {productivity.countLabel}
+                      </Label>
+                      <NumericInput
+                        id={`task-${task.id}-prod-count`}
+                        maxLength={6}
+                        value={productivityCount}
+                        onChange={setProductivityCount}
+                        placeholder="—"
+                      />
+                    </div>
+                  ) : null}
+
+                  {productivity.showAmount ? (
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`task-${task.id}-prod-amount`}>
+                        {productivity.amountLabel}
+                      </Label>
+                      <DecimalInput
+                        id={`task-${task.id}-prod-amount`}
+                        value={productivityAmount}
+                        onChange={setProductivityAmount}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              <p className="text-xs text-slate-500">
+                Optional — the task can be closed without these.
+              </p>
+            </div>
+          ) : null}
+
+          {task.status === TaskStatus.CLOSED &&
+          productivity &&
+          (task.productivityCount !== null ||
+            task.productivityAmount !== null) ? (
+            <p className="text-xs text-slate-600">
+              Productivity:{" "}
+              {task.productivityCount !== null ? (
+                <span className="font-medium text-slate-900">
+                  {task.productivityCount} {productivity.countLabel}
+                </span>
+              ) : null}
+              {task.productivityAmount !== null ? (
+                <span className="font-medium text-slate-900">
+                  {task.productivityCount !== null ? " / " : ""}
+                  {formatUSD(task.productivityAmount)}{" "}
+                  {productivity.amountLabel}
+                </span>
+              ) : null}
+            </p>
+          ) : null}
 
           {status === TaskStatus.CLOSED ? (
             <div className="space-y-1.5">

@@ -19,7 +19,6 @@ export interface TaskTypeOption {
 }
 
 export interface TaskFormValues {
-  title: string;
   description: string;
   practiceId: string;
   taskTypeId: string;
@@ -68,7 +67,6 @@ export const PRIORITY_VARIANT: Record<
 
 export function emptyTaskForm(assignedToId: string): TaskFormValues {
   return {
-    title: "",
     description: "",
     practiceId: "",
     taskTypeId: "",
@@ -386,27 +384,19 @@ export function TaskFormFields({
 }) {
   return (
     <div className="space-y-4">
+      {/* Type identifies the task, so it leads and it is required. */}
       <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefix}title`}>Title</Label>
-        <Input
-          id={`${idPrefix}title`}
-          value={values.title}
-          onChange={(event) => onChange("title", event.target.value)}
-          disabled={disabled}
-          maxLength={200}
-          required
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefix}taskTypeId`}>Task type</Label>
+        <Label htmlFor={`${idPrefix}taskTypeId`}>
+          Task type <span className="text-red-600">*</span>
+        </Label>
         <Select
           id={`${idPrefix}taskTypeId`}
           value={values.taskTypeId}
           onChange={(event) => onChange("taskTypeId", event.target.value)}
           disabled={disabled}
+          required
         >
-          <option value="">No type</option>
+          <option value="">Select a task type…</option>
           {taskTypes.map((type) => (
             <option key={type.id} value={type.id}>
               {type.name}
@@ -414,6 +404,15 @@ export function TaskFormFields({
           ))}
         </Select>
       </div>
+
+      <PracticeField
+        id={`${idPrefix}practiceId`}
+        value={values.practiceId}
+        onChange={(practiceId) => onChange("practiceId", practiceId)}
+        practices={practices}
+        disabled={disabled}
+        required={false}
+      />
 
       <div className="space-y-1.5">
         <Label htmlFor={`${idPrefix}description`}>Description</Label>
@@ -429,15 +428,6 @@ export function TaskFormFields({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <PracticeField
-          id={`${idPrefix}practiceId`}
-          value={values.practiceId}
-          onChange={(practiceId) => onChange("practiceId", practiceId)}
-          practices={practices}
-          disabled={disabled}
-          required={false}
-        />
-
         <div className="space-y-1.5">
           <Label htmlFor={`${idPrefix}assignedToId`}>Assigned to</Label>
           <Select

@@ -1,11 +1,13 @@
 /**
- * Manual verification of generated work-note text — not a test framework.
+ * Generated note text for every outcome.
  *
  *   npx tsx scripts/test-notes.ts
+ *
+ * Pure — no database, no dev server.
  */
 
-import { generateNote, type NoteFields } from "../lib/ar-note-format";
 import { OutcomeType } from "../lib/generated/prisma/enums";
+import { generateNote, noteDate } from "../lib/ar-note-format";
 
 let pass = 0;
 let fail = 0;
@@ -13,36 +15,53 @@ let fail = 0;
 function check(label: string, ok: boolean, detail = "") {
   if (ok) pass++;
   else fail++;
-  console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? `  — ${detail}` : ""}`);
+  console.log(
+    `${ok ? "PASS" : "FAIL"}  ${label}${ok || !detail ? "" : `\n      ${detail}`}`,
+  );
 }
 
-const contact: NoteFields = {
-  spokeWith: "Dana",
-  refNumber: "REF778",
+/** The contact block every outcome shares. */
+const contact = {
+  spokeWith: "John",
+  refNumber: "REF123",
   phone: "800-456-2583",
   howChecked: "Phone",
 };
 
-console.log("=== common fields on every outcome ===");
+const noIso = (note: string) => !/\d{4}-\d{2}-\d{2}/.test(note);
+
+console.log("=== date formatting ===");
 {
-  for (const outcome of Object.values(OutcomeType)) {
-    const note = generateNote(
-      outcome,
-      { ...contact, claimNumber: "CLM-999", claimReceivedDate: "07/01/2026" },
-      { claimNumber: "STORED-1" },
-    );
-    check(`${outcome}: Claim# from form wins`, note.includes("Claim#CLM-999"), note);
-    check(`${outcome}: claim received rendered`, note.includes("Received by insurance on 07/01/2026"), note);
-  }
+  check(
+    "ISO becomes MM/DD/YYYY",
+    noteDate("2026-07-31") === "07/31/2026",
+    noteDate("2026-07-31"),
+  );
+  check("MM/DD/YYYY passes through", noteDate("07/31/2026") === "07/31/2026");
+  check("blank stays undefined", noteDate("") === undefined);
+  check("undefined stays undefined", noteDate(undefined) === undefined);
 }
 
-console.log("\n=== claim number falls back to the stored value ===");
+console.log("\n=== claim prefix ===");
 {
-  const note = generateNote(OutcomeType.PAID, contact, { claimNumber: "STORED-1" });
-  check("stored claim number used when field blank", note.includes("Claim#STORED-1"), note);
+  const note = generateNote(OutcomeType.PAID, contact, {
+    claimNumber: "STORED-1",
+  });
+  check(
+    "stored claim number used when field blank",
+    note.includes("Claim#STORED-1"),
+    note,
+  );
 
   const none = generateNote(OutcomeType.PAID, contact, {});
   check("no prefix when neither present", !none.includes("Claim#"), none);
+
+  const typed = generateNote(
+    OutcomeType.PAID,
+    { ...contact, claimNumber: "TYPED-9" },
+    { claimNumber: "STORED-1" },
+  );
+  check("typed claim number wins", typed.includes("Claim#TYPED-9"), typed);
 }
 
 console.log("\n=== PAID ===");
@@ -50,19 +69,48 @@ console.log("\n=== PAID ===");
   const note = generateNote(OutcomeType.PAID, {
     ...contact,
     claimNumber: "CLM-1",
-    eraDate: "07/02/2026",
+    claimReceivedDate: "2026-07-02",
+    paymentDate: "2026-07-05",
     amountPaid: "240.50",
     copayAmount: "20.00",
-    allowedAmount: "260.00",
-    paymentDate: "07/05/2026",
+    deductibleAmount: "35.00",
     paymentType: "EFT",
     paymentNumber: "EFT99123",
     paymentScope: "Single",
   });
-  check("allowed amount rendered", note.includes("(allowed $260.00)"), note);
-  check("payment date rendered", note.includes("Payment dated 07/05/2026"), note);
-  check("core sentence intact", note.includes("Paid $240.50 with $20.00 Copay"), note);
+
+  check(
+    "claim received language",
+    note.includes("Claim received by ins. on 07/02/2026"),
+    note,
+  );
+  check(
+    "paid/finalized language",
+    note.includes("Paid/Finalized on 07/05/2026"),
+    note,
+  );
+  check("amount rendered", note.includes("$240.50"), note);
+  check("copay rendered", note.includes("$20.00 Copay"), note);
+  check("deductible rendered", note.includes("$35.00 Deductible"), note);
+  check("payment reference rendered", note.includes("EFT# EFT99123"), note);
+  check("no ERA language", !note.includes("Received on"), note);
+  check("no ISO dates", noIso(note), note);
+  check("checked via, not checked on", note.includes("Checked via Phone"), note);
+  check(
+    "contact rendered",
+    note.includes("Sw John Ref#REF123 Ph#800-456-2583"),
+    note,
+  );
   console.log(`      ${note}`);
+
+  const bulk = generateNote(OutcomeType.PAID, {
+    ...contact,
+    amountPaid: "100.00",
+    paymentDate: "2026-07-05",
+    paymentScope: "Bulk",
+    bulkTotalAmount: "5000.00",
+  });
+  check("bulk total rendered", bulk.includes("Bulk payment of $5,000.00"), bulk);
 }
 
 console.log("\n=== DENIED ===");
@@ -70,142 +118,211 @@ console.log("\n=== DENIED ===");
   const note = generateNote(OutcomeType.DENIED, {
     ...contact,
     claimNumber: "CLM-2",
-    eraDate: "07/02/2026",
-    denialDate: "06/28/2026",
+    claimReceivedDate: "2026-07-02",
+    denialDate: "2026-06-28",
     denialCode: "CO-197",
     denialReason: "No prior authorization",
     denialDetail: "Auth required for this CPT",
     actionTaken: "Appealed",
-    appealDeadline: "08/27/2026",
   });
-  check("denial issued rendered", note.includes("Denial issued 06/28/2026"), note);
-  check("denial code rendered", note.includes("Denial code CO-197"), note);
-  check("appeal deadline rendered", note.includes("Appeal deadline 08/27/2026"), note);
-  check("reason retained", note.includes("Denied for No prior authorization"), note);
+
+  check("denied language", note.includes("Denied on 06/28/2026"), note);
+  check("reason rendered", note.includes("No prior authorization"), note);
+  check("code rendered", note.includes("Denial code CO-197"), note);
+  check("detail rendered", note.includes("Auth required for this CPT"), note);
+  check("action rendered", note.includes("Appealed"), note);
+  check(
+    "claim received stated once",
+    (note.match(/Claim received by ins\./g) ?? []).length === 1,
+    note,
+  );
+  check("no ISO dates", noIso(note), note);
   console.log(`      ${note}`);
+
+  const other = generateNote(OutcomeType.DENIED, {
+    ...contact,
+    denialReason: "Timely filing",
+    actionTaken: "Other",
+    actionDetail: "Escalated to supervisor",
+  });
+  check(
+    "Other action uses its detail",
+    other.includes("Escalated to supervisor"),
+    other,
+  );
+  check("Other literal not shown", !other.includes(" Other."), other);
 }
 
-console.log("\n=== NO CLAIM ON FILE ===");
+console.log("\n=== NO_CLAIM_ON_FILE ===");
 {
   const note = generateNote(OutcomeType.NO_CLAIM_ON_FILE, {
     ...contact,
     claimNumber: "CLM-3",
+    checkedDate: "2026-07-30",
     actionTaken: "Resubmitted",
-    resubmissionDate: "07/10/2026",
-    timelyFilingDeadline: "09/30/2026",
   });
-  check("resubmission date rendered", note.includes("Resubmitted 07/10/2026"), note);
-  check("timely filing rendered", note.includes("Timely filing deadline 09/30/2026"), note);
-  check("action and date not duplicated", !note.includes("Resubmitted. Resubmitted"), note);
+
+  check("states no claim on file", note.includes("No claim on file"), note);
+  check("checked date rendered", note.includes("Checked on 07/30/2026"), note);
+  check("action rendered", note.includes("Resubmitted"), note);
+  check(
+    "no claim received date",
+    !note.includes("Claim received by ins."),
+    note,
+  );
+  check("no ISO dates", noIso(note), note);
   console.log(`      ${note}`);
-
-  const dateOnly = generateNote(OutcomeType.NO_CLAIM_ON_FILE, {
-    ...contact,
-    resubmissionDate: "07/10/2026",
-  });
-  check("date without action still reads", dateOnly.includes("Resubmitted 07/10/2026"), dateOnly);
-
-  const actionOnly = generateNote(OutcomeType.NO_CLAIM_ON_FILE, {
-    ...contact,
-    actionTaken: "Contacted Clearinghouse",
-  });
-  check("action without date still reads", actionOnly.includes("Contacted Clearinghouse."), actionOnly);
 }
 
-console.log("\n=== PATIENT RESPONSIBILITY ===");
+console.log("\n=== PATIENT_RESPONSIBILITY ===");
 {
   const note = generateNote(OutcomeType.PATIENT_RESPONSIBILITY, {
     ...contact,
-    eraDate: "07/02/2026",
+    claimNumber: "CLM-4",
+    claimReceivedDate: "2026-07-02",
+    paymentDate: "2026-07-06",
     deductibleAmount: "150.00",
-    patientBalance: "150.00",
-    statementSentDate: "07/06/2026",
+    copayAmount: "25.00",
+    coinsuranceAmount: "40.00",
   });
-  check("patient balance rendered", note.includes("Patient balance $150.00"), note);
-  check("statement sent rendered", note.includes("Statement sent 07/06/2026"), note);
+
+  check(
+    "finalized language",
+    note.includes("Paid/Finalized on 07/06/2026"),
+    note,
+  );
+  check("patient responsibility stated", note.includes("patient responsibility"), note);
+  check("deductible rendered", note.includes("$150.00 Deductible"), note);
+  check("copay rendered", note.includes("$25.00 Copay"), note);
+  check("coinsurance rendered", note.includes("$40.00 Coinsurance"), note);
+  check("no ISO dates", noIso(note), note);
   console.log(`      ${note}`);
 }
 
-console.log("\n=== IN PROCESS ===");
+console.log("\n=== IN_PROCESS ===");
 {
   const note = generateNote(OutcomeType.IN_PROCESS, {
     ...contact,
-    checkedDate: "07/20/2026",
+    claimNumber: "CLM-5",
+    claimReceivedDate: "2026-07-02",
+    checkedDate: "2026-07-30",
     expectedResolution: "14 business days",
-    expectedPaymentDate: "08/03/2026",
   });
-  check("expected payment rendered", note.includes("Expected payment 08/03/2026"), note);
+
+  check("in process stated", note.includes("In Process"), note);
+  check("checked date rendered", note.includes("Checked on 07/30/2026"), note);
+  check("TAT rendered", note.includes("TAT: 14 business days"), note);
+  check(
+    "claim received rendered",
+    note.includes("Claim received by ins. on 07/02/2026"),
+    note,
+  );
+  check("no ISO dates", noIso(note), note);
   console.log(`      ${note}`);
 }
 
-console.log("\n=== CHECK WITH OFFICE ===");
+console.log("\n=== CHECK_WITH_OFFICE ===");
 {
   const note = generateNote(OutcomeType.CHECK_WITH_OFFICE, {
-    ...contact,
-    whatIsNeeded: "Updated insurance card",
+    claimNumber: "CLM-6",
+    whatIsNeeded: "Corrected superbill",
     urgency: "Urgent",
-    neededByDate: "07/31/2026",
   });
-  check("needed by rendered", note.includes("Needed by 07/31/2026"), note);
-  check("urgent retained", note.includes("URGENT."), note);
+
+  check(
+    "need stated",
+    note.includes("Check with office — Corrected superbill"),
+    note,
+  );
+  check("urgency flagged", note.includes("URGENT"), note);
   console.log(`      ${note}`);
 }
 
-console.log("\n=== WRITE OFF ===");
+console.log("\n=== WRITE_OFF ===");
 {
   const note = generateNote(OutcomeType.WRITE_OFF, {
     ...contact,
-    writeOffAmount: "87.25",
-    reason: "Past timely filing",
-    writeOffType: "Timely Filing",
-    approvedBy: "Vishal",
+    claimNumber: "CLM-7",
+    writeOffAmount: "85.25",
+    reason: "Below collection threshold",
   });
-  check("write-off type rendered", note.includes("Type: Timely Filing"), note);
-  check("approver rendered", note.includes("Approved by Vishal"), note);
+
+  check("amount rendered", note.includes("Write off $85.25"), note);
+  check("reason rendered", note.includes("Below collection threshold"), note);
+  check(
+    "no claim received date",
+    !note.includes("Claim received by ins."),
+    note,
+  );
   console.log(`      ${note}`);
 }
 
-console.log("\n=== How Checked gating shows up in the note ===");
+console.log("\n=== OTHER ===");
 {
-  const phone = generateNote(OutcomeType.IN_PROCESS, {
-    checkedDate: "07/20/2026",
-    spokeWith: "Dana",
-    refNumber: "REF1",
-    phone: "800-456-2583",
-    howChecked: "Phone",
+  const note = generateNote(OutcomeType.OTHER, {
+    ...contact,
+    claimNumber: "CLM-8",
+    claimReceivedDate: "2026-07-02",
+    checkedDate: "2026-07-30",
   });
-  check("Phone keeps all three", phone.includes("Sw Dana") && phone.includes("Ref#REF1") && phone.includes("Ph#"), phone);
 
-  // The form clears the blocked values, so the note simply omits them.
-  const ivr = generateNote(OutcomeType.IN_PROCESS, {
-    checkedDate: "07/20/2026",
-    spokeWith: "",
-    refNumber: "REF1",
-    phone: "800-456-2583",
-    howChecked: "IVR",
-  });
-  check("IVR omits Spoke With", !ivr.includes("Sw "), ivr);
-  check("IVR keeps Ref#", ivr.includes("Ref#REF1"), ivr);
+  check(
+    "claim received rendered",
+    note.includes("Claim received by ins. on 07/02/2026"),
+    note,
+  );
+  check("checked date rendered", note.includes("Checked on 07/30/2026"), note);
+  check("no ISO dates", noIso(note), note);
+  console.log(`      ${note}`);
 
+  const bare = generateNote(OutcomeType.OTHER, {});
+  check("falls back when empty", bare === "Claim reviewed.", bare);
+}
+
+console.log("\n=== How Checked gating ===");
+{
   const portal = generateNote(OutcomeType.IN_PROCESS, {
-    checkedDate: "07/20/2026",
-    spokeWith: "",
-    refNumber: "",
-    phone: "",
+    checkedDate: "2026-07-30",
     howChecked: "Portal",
   });
-  check("Portal omits all three", !portal.includes("Sw ") && !portal.includes("Ref#") && !portal.includes("Ph#"), portal);
-  check("Portal still records how checked", portal.includes("Checked on Portal."), portal);
+  check("portal has no contact block", !portal.includes("Sw "), portal);
+  check("portal still says how", portal.includes("Checked via Portal"), portal);
+
+  const ivr = generateNote(OutcomeType.IN_PROCESS, {
+    checkedDate: "2026-07-30",
+    refNumber: "R1",
+    howChecked: "IVR",
+  });
+  check("IVR keeps the reference", ivr.includes("Ref#R1"), ivr);
 }
 
-console.log("\n=== no stray punctuation when everything optional is blank ===");
+console.log("\n=== no outcome leaks an ISO date or ERA wording ===");
 {
-  const note = generateNote(OutcomeType.WRITE_OFF, {
-    writeOffAmount: "10.00",
-    reason: "Small balance",
-  });
-  check("no double spaces", !note.includes("  "), note);
-  check("no space before period", !/ \./.test(note), note);
+  const every = Object.values(OutcomeType).map((outcome) =>
+    generateNote(outcome, {
+      ...contact,
+      claimNumber: "X",
+      claimReceivedDate: "2026-07-02",
+      paymentDate: "2026-07-05",
+      denialDate: "2026-06-28",
+      checkedDate: "2026-07-30",
+      amountPaid: "10.00",
+      denialReason: "R",
+      whatIsNeeded: "W",
+      writeOffAmount: "1.00",
+      reason: "Z",
+    }),
+  );
+
+  check("no ISO dates anywhere", every.every(noIso));
+  check(
+    "no ERA wording anywhere",
+    every.every((note) => !/\bERA\b|Received on/.test(note)),
+  );
+  check(
+    "no duplicated 'Checked on'",
+    every.every((note) => (note.match(/Checked on/g) ?? []).length <= 1),
+  );
 }
 
 console.log(`\n${"=".repeat(60)}`);

@@ -63,8 +63,8 @@ export function AddTaskModal({
   async function submit() {
     setError(null);
 
-    if (values.title.trim() === "") {
-      setError("A title is required.");
+    if (values.taskTypeId === "") {
+      setError("Please select a task type.");
       return;
     }
 
@@ -82,7 +82,6 @@ export function AddTaskModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: values.title,
           description: values.description || null,
           // A locked top-bar practice wins over whatever is in state.
           practiceId: contextPracticeId ?? values.practiceId ?? null,

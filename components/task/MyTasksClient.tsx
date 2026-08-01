@@ -17,6 +17,7 @@ import { EmptyState } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { formatDate } from "@/lib/format";
+import { formatMinutes } from "@/lib/task-timer-serialize";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
 import type { TaskDto } from "@/lib/task-serialize";
 
@@ -204,7 +205,13 @@ export function MyTasksClient({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="truncate text-sm font-medium text-slate-900">
-                        {task.title}
+                        {task.activeTimerStartedAt ? (
+                          <span
+                            title={`${task.activeTimerUserName ?? "Someone"} is timing this`}
+                            className="mr-1.5 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500 align-middle"
+                          />
+                        ) : null}
+                        {task.label}
                       </p>
                       <TaskTypeTag name={task.taskTypeName} />
                       <RecurringBadge
@@ -230,6 +237,9 @@ export function MyTasksClient({
                         <span className="text-amber-700">
                           Releases {formatDate(task.holdReleaseDate)}
                         </span>
+                      ) : null}
+                      {task.totalLoggedMinutes > 0 ? (
+                        <span>{formatMinutes(task.totalLoggedMinutes)} logged</span>
                       ) : null}
                       {task.noteCount > 0 ? (
                         <span>
@@ -261,6 +271,7 @@ export function MyTasksClient({
                 {expandedId === task.id ? (
                   <TaskEditPanel
                     task={task}
+                    currentUserId={currentUserId}
                     onSaved={load}
                     onClose={() => setExpandedId(null)}
                   />

@@ -19,6 +19,7 @@ import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/format";
+import { formatMinutes } from "@/lib/task-timer-serialize";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
 import type { TaskDto } from "@/lib/task-serialize";
 
@@ -37,12 +38,14 @@ export function TaskListClient({
   assignableUsers,
   taskTypes,
   canBulkEdit,
+  currentUserId,
   initial,
 }: {
   practices: { id: string; name: string }[];
   assignableUsers: { id: string; name: string }[];
   taskTypes: TaskTypeOption[];
   canBulkEdit: boolean;
+  currentUserId: string;
   initial: {
     assignedToId?: string;
     status?: string;
@@ -181,7 +184,7 @@ export function TaskListClient({
 
   function exportCsv() {
     const header = [
-      "Title",
+      "Task",
       "Task type",
       "Practice",
       "Assigned to",
@@ -192,11 +195,14 @@ export function TaskListClient({
       "Hold release",
       "Completed at",
       "Actual minutes",
+      "Logged minutes",
+      "Productivity count",
+      "Productivity amount",
       "Recurring",
     ];
 
     const rows = tasks.map((task) => [
-      task.title,
+      task.label,
       task.taskTypeName ?? "",
       task.practiceName ?? "",
       task.assignedToName ?? "",
@@ -207,6 +213,9 @@ export function TaskListClient({
       task.holdReleaseDate ? task.holdReleaseDate.slice(0, 10) : "",
       task.completedAt ? task.completedAt.slice(0, 10) : "",
       task.actualMinutes ?? "",
+      task.totalLoggedMinutes,
+      task.productivityCount ?? "",
+      task.productivityAmount ?? "",
       task.isRecurring ? "Series" : task.parentTaskId ? "Instance" : "",
     ]);
 
@@ -489,6 +498,7 @@ export function TaskListClient({
                   <th className="px-4 py-3">
                     <SortHeader label="Status" sortAs="status" />
                   </th>
+                  <th className="px-4 py-3 text-right">Time</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
@@ -515,9 +525,22 @@ export function TaskListClient({
                         </td>
                       ) : null}
                       <td className="px-4 py-3">
+                        {task.activeTimerStartedAt ? (
+                          <span
+                            title={`${task.activeTimerUserName ?? "Someone"} is timing this`}
+                            className="mr-1.5 inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-500 align-middle"
+                          />
+                        ) : null}
                         <span className="font-medium text-slate-900">
-                          {task.title}
+                          {task.label}
                         </span>
+                        {task.productivityCount !== null ? (
+                          <span className="ml-2 align-middle">
+                            <Badge variant="neutral">
+                              {task.productivityCount}
+                            </Badge>
+                          </span>
+                        ) : null}
                         {task.isRecurring || task.parentTaskId ? (
                           <span className="ml-2 inline-block align-middle">
                             <RecurringBadge
@@ -558,6 +581,13 @@ export function TaskListClient({
                           {STATUS_LABELS[task.status]}
                         </Badge>
                       </td>
+                      <td className="px-4 py-3 text-right tabular-nums text-slate-700">
+                        {task.totalLoggedMinutes > 0 ? (
+                          formatMinutes(task.totalLoggedMinutes)
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-right">
                         <button
                           type="button"
@@ -575,9 +605,10 @@ export function TaskListClient({
 
                     {expandedId === task.id ? (
                       <tr>
-                        <td colSpan={canBulkEdit ? 9 : 8} className="p-0">
+                        <td colSpan={canBulkEdit ? 10 : 9} className="p-0">
                           <TaskEditPanel
                             task={task}
+                            currentUserId={currentUserId}
                             onSaved={load}
                             onClose={() => setExpandedId(null)}
                           />

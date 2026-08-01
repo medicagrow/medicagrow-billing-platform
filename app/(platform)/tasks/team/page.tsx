@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { AssignTaskButton } from "@/components/task/AssignTaskButton";
+import { TimeEditRequestsPanel } from "@/components/task/TimeEditRequestsPanel";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
@@ -205,6 +206,15 @@ export default async function TeamTasksPage({
           </table>
         </div>
       )}
+
+      {/* Time corrections wait on a PM or Owner, so the queue lives here
+          rather than anywhere a biller would see it. */}
+      <div className="mt-8">
+        <h3 className="mb-3 text-sm font-semibold text-slate-900">
+          Time Edit Requests
+        </h3>
+        <TimeEditRequestsPanel />
+      </div>
     </div>
   );
 }

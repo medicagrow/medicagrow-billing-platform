@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { DecimalInput } from "@/components/ui/DecimalInput";
+import { NoSpaceInput } from "@/components/ui/NoSpaceInput";
 import { FieldError, Input, Label } from "@/components/ui/Input";
 import { PhoneInput } from "@/components/ui/PhoneInput";
 import { Select, Textarea } from "@/components/ui/Select";
@@ -166,7 +167,10 @@ export function WorkNoteForm({
     const missing: string[] = [];
     if (outcomeType === OutcomeType.PAID) {
       if (!fields.amountPaid) missing.push("Amount Paid");
-      if (!fields.eraDate) missing.push("ERA/EOB Received Date");
+      if (!fields.paymentDate) missing.push("Payment / Finalized Date");
+    }
+    if (outcomeType === OutcomeType.OTHER && !additionalNotes.trim()) {
+      missing.push("Additional Notes");
     }
     if (outcomeType === OutcomeType.DENIED && !fields.denialReason) {
       missing.push("Denial Reason");
@@ -266,15 +270,49 @@ export function WorkNoteForm({
         </Select>
       </Field>
 
+      {/* The claim number and the date insurance received it open every
+          outcome — they are what a rep asks for first. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field
+          label="Claim#"
+          htmlFor="claimNumber"
+          hint="Pre-filled from the claim; override if it was submitted under a different number."
+        >
+          <NoSpaceInput
+            id="claimNumber"
+            value={fields.claimNumber ?? ""}
+            onChange={(value) => set("claimNumber", value)}
+          />
+        </Field>
+        {/* No claim on file, a write-off and an office question have no
+            received date to state. */}
+        {outcomeType === OutcomeType.NO_CLAIM_ON_FILE ||
+        outcomeType === OutcomeType.CHECK_WITH_OFFICE ||
+        outcomeType === OutcomeType.WRITE_OFF ? null : (
+          <Field
+            label="Claim received date"
+            htmlFor="claimReceivedDate"
+            hint="When the insurance received the claim."
+          >
+            <Input
+              id="claimReceivedDate"
+              type="date"
+              value={fields.claimReceivedDate ?? ""}
+              onChange={(event) => set("claimReceivedDate", event.target.value)}
+            />
+          </Field>
+        )}
+      </div>
+
       {/* ---------------------------- PAID ---------------------------- */}
       {outcomeType === OutcomeType.PAID ? (
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="ERA/EOB received date" htmlFor="eraDate">
+          <Field label="Payment / finalized date" htmlFor="paymentDate">
             <Input
-              id="eraDate"
+              id="paymentDate"
               type="date"
-              value={fields.eraDate ?? ""}
-              onChange={(event) => set("eraDate", event.target.value)}
+              value={fields.paymentDate ?? ""}
+              onChange={(event) => set("paymentDate", event.target.value)}
             />
           </Field>
           <Field label="Amount paid" htmlFor="amountPaid">
@@ -298,24 +336,6 @@ export function WorkNoteForm({
               onChange={(value) => set("deductibleAmount", value)}
             />
           </Field>
-          <Field
-            label="Allowed amount (optional)"
-            htmlFor="allowedAmount"
-          >
-            <DecimalInput
-              id="allowedAmount"
-              value={fields.allowedAmount ?? ""}
-              onChange={(value) => set("allowedAmount", value)}
-            />
-          </Field>
-          <Field label="Payment date (optional)" htmlFor="paymentDate">
-            <Input
-              id="paymentDate"
-              type="date"
-              value={fields.paymentDate ?? ""}
-              onChange={(event) => set("paymentDate", event.target.value)}
-            />
-          </Field>
           <Field label="Payment type" htmlFor="paymentType">
             <Select
               id="paymentType"
@@ -331,10 +351,10 @@ export function WorkNoteForm({
             </Select>
           </Field>
           <Field label={paymentLabel} htmlFor="paymentNumber">
-            <Input
+            <NoSpaceInput
               id="paymentNumber"
               value={fields.paymentNumber ?? ""}
-              onChange={(event) => set("paymentNumber", event.target.value)}
+              onChange={(value) => set("paymentNumber", value)}
             />
           </Field>
           <Field label="Payment scope" htmlFor="paymentScope">
@@ -366,15 +386,7 @@ export function WorkNoteForm({
       {outcomeType === OutcomeType.DENIED ? (
         <div className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="ERA/EOB received date" htmlFor="eraDate">
-              <Input
-                id="eraDate"
-                type="date"
-                value={fields.eraDate ?? ""}
-                onChange={(event) => set("eraDate", event.target.value)}
-              />
-            </Field>
-            <Field label="Denial date (optional)" htmlFor="denialDate">
+            <Field label="Denial date" htmlFor="denialDate">
               <Input
                 id="denialDate"
                 type="date"
@@ -387,10 +399,10 @@ export function WorkNoteForm({
               htmlFor="denialCode"
               hint="The code on the EOB, e.g. CO-197. Drives denial trending."
             >
-              <Input
+              <NoSpaceInput
                 id="denialCode"
                 value={fields.denialCode ?? ""}
-                onChange={(event) => set("denialCode", event.target.value)}
+                onChange={(value) => set("denialCode", value)}
                 placeholder="CO-197"
               />
             </Field>
@@ -484,43 +496,21 @@ export function WorkNoteForm({
               ))}
             </Select>
           </Field>
-          <Field label="Resubmission date (optional)" htmlFor="resubmissionDate">
-            <Input
-              id="resubmissionDate"
-              type="date"
-              value={fields.resubmissionDate ?? ""}
-              onChange={(event) => set("resubmissionDate", event.target.value)}
-            />
-          </Field>
-          <Field
-            label="Timely filing deadline (optional)"
-            htmlFor="timelyFilingDeadline"
-            hint="Past this date the claim is unbillable — track it before it lapses."
-          >
-            <Input
-              id="timelyFilingDeadline"
-              type="date"
-              value={fields.timelyFilingDeadline ?? ""}
-              onChange={(event) =>
-                set("timelyFilingDeadline", event.target.value)
-              }
-            />
-          </Field>
         </div>
       ) : null}
 
       {/* ------------------ PATIENT RESPONSIBILITY -------------------- */}
       {outcomeType === OutcomeType.PATIENT_RESPONSIBILITY ? (
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="ERA/EOB received date" htmlFor="eraDate">
+          <Field label="Finalized date" htmlFor="paymentDate">
             <Input
-              id="eraDate"
+              id="paymentDate"
               type="date"
-              value={fields.eraDate ?? ""}
-              onChange={(event) => set("eraDate", event.target.value)}
+              value={fields.paymentDate ?? ""}
+              onChange={(event) => set("paymentDate", event.target.value)}
             />
           </Field>
-          <Field label="Deductible amount" htmlFor="deductibleAmount">
+          <Field label="Deductible amount (optional)" htmlFor="deductibleAmount">
             <DecimalInput
               id="deductibleAmount"
               value={fields.deductibleAmount ?? ""}
@@ -577,7 +567,11 @@ export function WorkNoteForm({
               onChange={(event) => set("checkedDate", event.target.value)}
             />
           </Field>
-          <Field label="Expected resolution (optional)" htmlFor="expectedResolution">
+          <Field
+            label="TAT / expected resolution (optional)"
+            htmlFor="expectedResolution"
+            hint="Processing time/TAT mentioned by insurance."
+          >
             <Input
               id="expectedResolution"
               value={fields.expectedResolution ?? ""}
@@ -585,20 +579,6 @@ export function WorkNoteForm({
                 set("expectedResolution", event.target.value)
               }
               placeholder="e.g. 14 business days"
-            />
-          </Field>
-          <Field
-            label="Expected payment date (optional)"
-            htmlFor="expectedPaymentDate"
-            hint="Gives the follow-up date something concrete to key off."
-          >
-            <Input
-              id="expectedPaymentDate"
-              type="date"
-              value={fields.expectedPaymentDate ?? ""}
-              onChange={(event) =>
-                set("expectedPaymentDate", event.target.value)
-              }
             />
           </Field>
         </div>
@@ -694,28 +674,6 @@ export function WorkNoteForm({
 
       {/* ------------------------ COMMON FIELDS ----------------------- */}
       <div className="space-y-3 border-t border-slate-100 pt-4">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field
-            label="Claim#"
-            htmlFor="claimNumber"
-            hint="Pre-filled from the claim; override if it was submitted under a different number."
-          >
-            <Input
-              id="claimNumber"
-              value={fields.claimNumber ?? ""}
-              onChange={(event) => set("claimNumber", event.target.value)}
-            />
-          </Field>
-          <Field label="Claim received date (optional)" htmlFor="claimReceivedDate">
-            <Input
-              id="claimReceivedDate"
-              type="date"
-              value={fields.claimReceivedDate ?? ""}
-              onChange={(event) => set("claimReceivedDate", event.target.value)}
-            />
-          </Field>
-        </div>
-
         {/* Sits above the contact fields because it controls them. */}
         <fieldset>
           <legend className="text-sm font-medium text-slate-700">
