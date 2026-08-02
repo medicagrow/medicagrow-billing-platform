@@ -172,6 +172,43 @@ console.log("\n=== NO_CLAIM_ON_FILE ===");
   );
   check("no ISO dates", noIso(note), note);
   console.log(`      ${note}`);
+
+  const tracked = generateNote(OutcomeType.NO_CLAIM_ON_FILE, {
+    ...contact,
+    claimNumber: "CLM-3b",
+    checkedDate: "2026-07-30",
+    actionTaken: "Resubmitted",
+    resubmissionDate: "2026-07-31",
+    timelyFilingDeadline: "2026-10-15",
+  });
+
+  check(
+    "resubmission date rendered",
+    tracked.includes("Resubmitted on 07/31/2026"),
+    tracked,
+  );
+  check(
+    "timely filing deadline rendered",
+    tracked.includes("Timely filing deadline: 10/15/2026"),
+    tracked,
+  );
+  check("both dates in MM/DD/YYYY", noIso(tracked), tracked);
+  console.log(`      ${tracked}`);
+
+  const partial = generateNote(OutcomeType.NO_CLAIM_ON_FILE, {
+    checkedDate: "2026-07-30",
+    timelyFilingDeadline: "2026-10-15",
+  });
+  check(
+    "deadline alone still renders",
+    partial.includes("Timely filing deadline: 10/15/2026"),
+    partial,
+  );
+  check(
+    "no resubmission wording when unset",
+    !partial.includes("Resubmitted on"),
+    partial,
+  );
 }
 
 console.log("\n=== PATIENT_RESPONSIBILITY ===");

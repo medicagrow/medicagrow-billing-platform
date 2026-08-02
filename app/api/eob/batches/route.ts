@@ -45,6 +45,49 @@ export async function POST(request: NextRequest) {
     return apiErrorResponse("You do not have access to this practice.", 403);
   }
 
+  /**
+   * Every assignee must belong to the practice, or the entry lands in a queue
+   * its owner cannot open. Owners hold no UserPractice rows, so they are
+   * allowed through explicitly rather than by the join.
+   */
+  const assigneeIds = Array.from(
+    new Set(input.entries.map((entry) => entry.assignedToId)),
+  );
+
+  const eligible = await prisma.user.findMany({
+    where: {
+      id: { in: assigneeIds },
+      isActive: true,
+      OR: [
+        { role: Role.OWNER },
+        { practices: { some: { practiceId: input.practiceId } } },
+      ],
+    },
+    select: { id: true },
+  });
+
+  const eligibleIds = new Set(eligible.map((user) => user.id));
+  const rejected = assigneeIds.filter((id) => !eligibleIds.has(id));
+
+  if (rejected.length > 0) {
+    return apiErrorResponse(
+      "An entry is assigned to someone who does not work this practice.",
+      422,
+    );
+  }
+
+  // A biller may only take entries themselves — assigning work to a colleague
+  // is a PM/Owner action.
+  if (
+    session!.user.role === Role.BILLER &&
+    assigneeIds.some((id) => id !== session!.user.id)
+  ) {
+    return apiErrorResponse(
+      "You can only assign EOB entries to yourself.",
+      403,
+    );
+  }
+
   const batch = await prisma.eobBatch.create({
     data: {
       practiceId: input.practiceId,
@@ -68,6 +111,7 @@ export async function POST(request: NextRequest) {
           rejectionReason: entry.rejectionReason ?? null,
           actionRequired: entry.actionRequired ?? null,
           arClaimId: entry.arClaimId ?? null,
+          assignedToId: entry.assignedToId,
           // Everything starts unreviewed.
           statusLabel: DEFAULT_EOB_STATUS_LABEL,
           statusCategory: DEFAULT_EOB_STATUS_CATEGORY,

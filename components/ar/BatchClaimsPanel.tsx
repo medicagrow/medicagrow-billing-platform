@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/ar/StatusBadge";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
+import { MultiSelectDropdown } from "@/components/ui/MultiSelectDropdown";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
@@ -16,6 +17,8 @@ import type { ClaimDto } from "@/lib/ar-serialize";
 import { formatDate, formatUSD } from "@/lib/format";
 
 type TabKey = "all" | "unassigned" | "blue" | "overdue";
+
+type SortKey = "aging" | "patientName" | "provider" | "balance" | "status";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "all", label: "All Claims" },
@@ -53,10 +56,12 @@ export function BatchClaimsPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sortKey, setSortKey] = useState<SortKey>("aging");
+  const [ascending, setAscending] = useState(false);
   const [assignTo, setAssignTo] = useState("");
   const [assigning, setAssigning] = useState(false);
-  const [insuranceFilter, setInsuranceFilter] = useState("");
-  const [agingFilter, setAgingFilter] = useState("");
+  const [insuranceFilter, setInsuranceFilter] = useState<string[]>([]);
+  const [agingFilter, setAgingFilter] = useState<string[]>([]);
 
   const pageSize = 50;
 
@@ -70,11 +75,18 @@ export function BatchClaimsPanel({
     if (tab === "unassigned") params.set("unassigned", "true");
     if (tab === "blue") params.set("statusCategory", "BLUE");
     if (tab === "overdue") params.set("overdue", "true");
-    if (insuranceFilter) params.set("insuranceName", insuranceFilter);
-    if (agingFilter) params.set("agingBucket", agingFilter);
+    // Empty means "no filter", so the params are omitted entirely.
+    if (insuranceFilter.length > 0) {
+      params.set("insuranceNames", insuranceFilter.join(","));
+    }
+    if (agingFilter.length > 0) {
+      params.set("agingBuckets", agingFilter.join(","));
+    }
+    params.set("sort", sortKey);
+    params.set("direction", ascending ? "asc" : "desc");
 
     return params.toString();
-  }, [batchId, page, tab, insuranceFilter, agingFilter]);
+  }, [batchId, page, tab, insuranceFilter, agingFilter, sortKey, ascending]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -169,6 +181,31 @@ export function BatchClaimsPanel({
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
+  const SortHeader = ({
+    label,
+    sortAs,
+  }: {
+    label: string;
+    sortAs: SortKey;
+  }) => (
+    <button
+      type="button"
+      onClick={() => {
+        if (sortKey === sortAs) setAscending((current) => !current);
+        else {
+          setSortKey(sortAs);
+          // Aging reads newest-first; names and amounts read ascending.
+          setAscending(sortAs !== "aging");
+        }
+        setPage(1);
+      }}
+      className="inline-flex items-center gap-1 hover:text-slate-800"
+    >
+      {label}
+      {sortKey === sortAs ? <span>{ascending ? "▲" : "▼"}</span> : null}
+    </button>
+  );
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center gap-1 border-b border-slate-200">
@@ -192,37 +229,39 @@ export function BatchClaimsPanel({
       </div>
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Select
-          value={insuranceFilter}
-          onChange={(event) => {
-            setInsuranceFilter(event.target.value);
+        <MultiSelectDropdown
+          options={insuranceOptions.map((name) => ({
+            label: name,
+            value: name,
+          }))}
+          selected={insuranceFilter}
+          onChange={(next) => {
+            setInsuranceFilter(next);
             setPage(1);
           }}
-          className="w-auto min-w-[180px]"
-        >
-          <option value="">All insurances</option>
-          {insuranceOptions.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </Select>
+          placeholder="All insurances"
+          allLabel="All Insurances"
+          noun="insurances"
+          aria-label="Insurance"
+          className="w-auto min-w-[200px]"
+        />
 
-        <Select
-          value={agingFilter}
-          onChange={(event) => {
-            setAgingFilter(event.target.value);
+        <MultiSelectDropdown
+          options={AGING_BUCKETS.map((bucket) => ({
+            label: bucket.label,
+            value: bucket.key,
+          }))}
+          selected={agingFilter}
+          onChange={(next) => {
+            setAgingFilter(next);
             setPage(1);
           }}
-          className="w-auto min-w-[150px]"
-        >
-          <option value="">All ages</option>
-          {AGING_BUCKETS.map((bucket) => (
-            <option key={bucket.key} value={bucket.key}>
-              {bucket.label}
-            </option>
-          ))}
-        </Select>
+          placeholder="All ages"
+          allLabel="All Ages"
+          noun="buckets"
+          aria-label="Aging"
+          className="w-auto min-w-[180px]"
+        />
 
         {canAssign && !batchClosed ? (
           <div className="ml-auto flex items-center gap-2">
@@ -301,13 +340,24 @@ export function BatchClaimsPanel({
                       />
                     </th>
                   ) : null}
-                  <th className="px-4 py-3">Patient</th>
+                  <th className="px-4 py-3">
+                    <SortHeader label="Patient" sortAs="patientName" />
+                  </th>
                   <th className="px-4 py-3">Insurance</th>
+                  <th className="px-4 py-3">
+                    <SortHeader label="Provider" sortAs="provider" />
+                  </th>
                   <th className="px-4 py-3">DOS</th>
                   <th className="px-4 py-3">CPT</th>
-                  <th className="px-4 py-3 text-right">Balance</th>
-                  <th className="px-4 py-3 text-right">Aging</th>
-                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-right">
+                    <SortHeader label="Balance" sortAs="balance" />
+                  </th>
+                  <th className="px-4 py-3 text-right">
+                    <SortHeader label="Aging" sortAs="aging" />
+                  </th>
+                  <th className="px-4 py-3">
+                    <SortHeader label="Status" sortAs="status" />
+                  </th>
                   <th className="px-4 py-3">Assigned to</th>
                   <th className="px-4 py-3">Follow-up</th>
                   <th className="px-4 py-3 text-right">Actions</th>
@@ -343,6 +393,14 @@ export function BatchClaimsPanel({
                       </td>
                       <td className="px-4 py-3 text-slate-600">
                         {claim.insuranceName}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {/* renderingProvider is the specific name; providerName
+                            is what the import carried. */}
+                        {claim.renderingProvider ??
+                          claim.providerName ?? (
+                            <span className="text-slate-400">—</span>
+                          )}
                       </td>
                       <td className="px-4 py-3 text-slate-600">
                         {formatDate(claim.dateOfService)}

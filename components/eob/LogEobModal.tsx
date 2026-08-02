@@ -26,6 +26,7 @@ interface EntryDraft {
   denialCode: string;
   denialReason: string;
   actionRequired: string;
+  assignedToId: string;
 }
 
 const emptyEntry = (): EntryDraft => ({
@@ -39,14 +40,23 @@ const emptyEntry = (): EntryDraft => ({
   denialCode: "",
   denialReason: "",
   actionRequired: "",
+  assignedToId: "",
 });
 
 export function LogEobModal({
   practices,
   payerSuggestions,
+  membersByPractice,
+  currentUser,
+  canAssignOthers,
 }: {
   practices: { id: string; name: string }[];
   payerSuggestions: string[];
+  /** Who may be assigned an entry, keyed by practice. */
+  membersByPractice: Record<string, { id: string; name: string }[]>;
+  currentUser: { id: string; name: string };
+  /** Billers may only take entries themselves. */
+  canAssignOthers: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -61,7 +71,9 @@ export function LogEobModal({
   const [batchReference, setBatchReference] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
   const [notes, setNotes] = useState("");
-  const [entries, setEntries] = useState<EntryDraft[]>([emptyEntry()]);
+  const [entries, setEntries] = useState<EntryDraft[]>([
+    { ...emptyEntry(), assignedToId: currentUser.id },
+  ]);
   const [reasonSuggestions, setReasonSuggestions] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -95,7 +107,7 @@ export function LogEobModal({
     setBatchReference("");
     setTotalAmount("");
     setNotes("");
-    setEntries([emptyEntry()]);
+    setEntries([{ ...emptyEntry(), assignedToId: currentUser.id }]);
     setError(null);
     setSaving(false);
   }
@@ -105,6 +117,41 @@ export function LogEobModal({
     reset();
     setOpen(false);
   }
+
+  const effectivePracticeId = contextPracticeId ?? practiceId;
+
+  /**
+   * A biller may only take entries themselves, so their list is just them.
+   * Before a practice is chosen there is no roster to offer either.
+   */
+  const assigneeOptions = !canAssignOthers
+    ? [currentUser]
+    : effectivePracticeId
+      ? (membersByPractice[effectivePracticeId] ?? [currentUser])
+      : [currentUser];
+
+  // Changing practice can strip an assignee of their access, so anyone no
+  // longer eligible falls back to the poster rather than silently persisting.
+  // The roster is recomputed here rather than closed over, so the dependency
+  // list is the real one.
+  useEffect(() => {
+    const allowed = new Set(
+      (!canAssignOthers
+        ? [currentUser]
+        : effectivePracticeId
+          ? (membersByPractice[effectivePracticeId] ?? [currentUser])
+          : [currentUser]
+      ).map((option) => option.id),
+    );
+
+    setEntries((current) =>
+      current.map((entry) =>
+        allowed.has(entry.assignedToId)
+          ? entry
+          : { ...entry, assignedToId: currentUser.id },
+      ),
+    );
+  }, [effectivePracticeId, canAssignOthers, currentUser, membersByPractice]);
 
   const updateEntry = (index: number, patch: Partial<EntryDraft>) =>
     setEntries((current) =>
@@ -126,12 +173,13 @@ export function LogEobModal({
       (entry) =>
         !entry.patientName.trim() ||
         !entry.dateOfService ||
-        !entry.denialReason.trim(),
+        !entry.denialReason.trim() ||
+        !entry.assignedToId,
     );
 
     if (incomplete !== -1) {
       return setError(
-        `Row ${incomplete + 1} needs a patient name, date of service and reason.`,
+        `Row ${incomplete + 1} needs a patient name, date of service, reason and assignee.`,
       );
     }
 
@@ -159,6 +207,7 @@ export function LogEobModal({
             denialCode: entry.denialCode.trim() || undefined,
             denialReason: entry.denialReason.trim(),
             actionRequired: entry.actionRequired.trim() || undefined,
+            assignedToId: entry.assignedToId,
           })),
         }),
       });
@@ -273,7 +322,12 @@ export function LogEobModal({
               <Button
                 variant="secondary"
                 className="px-2.5 py-1 text-xs"
-                onClick={() => setEntries((current) => [...current, emptyEntry()])}
+                onClick={() =>
+                  setEntries((current) => [
+                    ...current,
+                    { ...emptyEntry(), assignedToId: currentUser.id },
+                  ])
+                }
                 disabled={saving}
               >
                 Add Row
@@ -386,6 +440,22 @@ export function LogEobModal({
                       placeholder="Action required"
                       disabled={saving}
                     />
+                    {/* Every entry is owned from the moment it is logged —
+                        an unassigned one sits in the flat list unworked. */}
+                    <Select
+                      value={entry.assignedToId}
+                      onChange={(event) =>
+                        updateEntry(index, { assignedToId: event.target.value })
+                      }
+                      disabled={saving || !canAssignOthers}
+                      aria-label="Assigned to"
+                    >
+                      {assigneeOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.name}
+                        </option>
+                      ))}
+                    </Select>
                     <div className="sm:col-span-3">
                       <Input
                         list="eob-reasons"

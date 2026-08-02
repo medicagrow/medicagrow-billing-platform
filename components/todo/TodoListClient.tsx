@@ -5,6 +5,11 @@ import { useRouter } from "next/navigation";
 import { AddTodoModal } from "@/components/todo/AddTodoModal";
 import { TodoEditPanel } from "@/components/todo/TodoEditPanel";
 import { Badge } from "@/components/ui/Badge";
+import {
+  DueDateFilters,
+  dueDateParams,
+  type DueQuickFilter,
+} from "@/components/ui/DueDateFilters";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
@@ -74,6 +79,7 @@ export function TodoListClient({
   const [isShared, setIsShared] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  const [dueQuick, setDueQuick] = useState<DueQuickFilter>("none");
 
   const [sortKey, setSortKey] = useState<SortKey>("dueDate");
   const [ascending, setAscending] = useState(true);
@@ -93,8 +99,12 @@ export function TodoListClient({
     if (search) params.set("search", search);
     if (isRecurring) params.set("isRecurring", "true");
     if (isShared) params.set("isShared", "true");
-    if (from) params.set("from", from);
-    if (to) params.set("to", to);
+    // The quick filters set their own bound, so they replace the range.
+    for (const [key, value] of Object.entries(
+      dueDateParams(dueQuick, from, to),
+    )) {
+      params.set(key, value);
+    }
 
     return params.toString();
   }, [
@@ -108,6 +118,7 @@ export function TodoListClient({
     search,
     isRecurring,
     isShared,
+    dueQuick,
     from,
     to,
   ]);
@@ -288,29 +299,23 @@ export function TodoListClient({
           </Select>
         ) : null}
 
-        <div className="flex items-center gap-1">
-          <Input
-            type="date"
-            value={from}
-            onChange={(event) => {
-              setFrom(event.target.value);
-              setPage(1);
-            }}
-            className="w-auto"
-            aria-label="Due from"
-          />
-          <span className="text-slate-400">→</span>
-          <Input
-            type="date"
-            value={to}
-            onChange={(event) => {
-              setTo(event.target.value);
-              setPage(1);
-            }}
-            className="w-auto"
-            aria-label="Due to"
-          />
-        </div>
+        <DueDateFilters
+          quick={dueQuick}
+          onQuickChange={(next) => {
+            setDueQuick(next);
+            setPage(1);
+          }}
+          from={from}
+          to={to}
+          onFromChange={(value) => {
+            setFrom(value);
+            setPage(1);
+          }}
+          onToChange={(value) => {
+            setTo(value);
+            setPage(1);
+          }}
+        />
 
         <label className="flex items-center gap-2 whitespace-nowrap py-2 text-sm text-slate-600">
           <input

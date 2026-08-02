@@ -57,15 +57,42 @@ export const bulkAssignSchema = z.object({
   assignedToId: z.string().min(1).nullable(),
 });
 
+/**
+ * A repeated query param arrives as one comma-separated string. Blank entries
+ * are dropped so a trailing comma cannot become a filter on "".
+ */
+const csvList = z
+  .union([z.string(), z.array(z.string()), z.null(), z.undefined()])
+  .transform((value) => {
+    if (value === null || value === undefined) return undefined;
+
+    const parts = (Array.isArray(value) ? value : value.split(","))
+      .map((part) => part.trim())
+      .filter((part) => part !== "");
+
+    return parts.length > 0 ? parts : undefined;
+  })
+  // A transform pipeline hides that undefined is acceptable.
+  .optional();
+
 export const listClaimsQuerySchema = z.object({
   batchId: z.string().min(1, "batchId is required"),
   assignedToId: z.string().optional(),
   unassigned: z.enum(["true", "false"]).optional(),
   statusCategory: z.enum(StatusCategory).optional(),
   statusLabel: z.string().optional(),
+  /** Kept for callers still passing one name as a substring match. */
   insuranceName: z.string().optional(),
+  /** Exact matches, any of which qualifies. */
+  insuranceNames: csvList,
   agingBucket: z.enum(AGING_BUCKET_KEYS as [string, ...string[]]).optional(),
+  /** Any of these buckets qualifies. */
+  agingBuckets: csvList,
   overdue: z.enum(["true", "false"]).optional(),
+  sort: z
+    .enum(["aging", "patientName", "provider", "balance", "status"])
+    .optional(),
+  direction: z.enum(["asc", "desc"]).optional(),
 });
 
 const statusLabelSchema = z

@@ -67,8 +67,14 @@ export default async function EobHomePage({
 
   // The summary cards are server-rendered against the whole scope; the table
   // below fetches its own rows so filtering and sorting stay interactive.
-  const [unresolved, resolved, practices, payers, assignableUsers] =
-    await Promise.all([
+  const [
+    unresolved,
+    resolved,
+    practices,
+    memberships,
+    payers,
+    assignableUsers,
+  ] = await Promise.all([
       prisma.eobEntry.findMany({
         where: {
           batch: practiceFilter,
@@ -90,6 +96,19 @@ export default async function EobHomePage({
         },
         orderBy: { name: "asc" },
         select: { id: true, name: true },
+      }),
+      // Who may be assigned an entry, per practice. Small enough to send
+      // whole, and it saves a round trip every time the practice changes.
+      prisma.userPractice.findMany({
+        where: {
+          user: { isActive: true },
+          ...(practiceIds === null ? {} : { practiceId: { in: practiceIds } }),
+        },
+        select: {
+          practiceId: true,
+          user: { select: { id: true, name: true } },
+        },
+        orderBy: { user: { name: "asc" } },
       }),
       prisma.eobBatch.findMany({
         where: practiceFilter,
@@ -113,6 +132,24 @@ export default async function EobHomePage({
         select: { id: true, name: true },
       }),
     ]);
+
+  // Owners hold no UserPractice rows, so they are added to every practice's
+  // list explicitly — otherwise an owner could not assign an entry to anyone.
+  const membersByPractice: Record<string, { id: string; name: string }[]> = {};
+
+  for (const practice of practices) {
+    membersByPractice[practice.id] = memberships
+      .filter((row) => row.practiceId === practice.id)
+      .map((row) => row.user);
+  }
+
+  if (user.role === Role.OWNER) {
+    for (const list of Object.values(membersByPractice)) {
+      if (!list.some((member) => member.id === user.id)) {
+        list.unshift({ id: user.id, name: user.name ?? "Me" });
+      }
+    }
+  }
 
   const unresolvedDenials = unresolved.filter(
     (entry) => entry.entryType === EobEntryType.DENIAL,
@@ -148,6 +185,9 @@ export default async function EobHomePage({
           <LogEobModal
             practices={practices}
             payerSuggestions={payers.map((row) => row.payerName)}
+            membersByPractice={membersByPractice}
+            currentUser={{ id: user.id, name: user.name ?? "Me" }}
+            canAssignOthers={user.role !== Role.BILLER}
           />
         }
       />

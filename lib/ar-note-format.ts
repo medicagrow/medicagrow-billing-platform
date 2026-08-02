@@ -45,9 +45,7 @@ export interface NoteFields {
   expectedResolution?: string;
   /** @deprecated no longer collected; present in older saved notes. */
   expectedPaymentDate?: string;
-  /** @deprecated no longer collected; present in older saved notes. */
   timelyFilingDeadline?: string;
-  /** @deprecated no longer collected; present in older saved notes. */
   resubmissionDate?: string;
 
   // Patient responsibility
@@ -215,11 +213,16 @@ export function generateNote(
     case OutcomeType.NO_CLAIM_ON_FILE: {
       const checkedOn = noteDate(fields.checkedDate);
       const action = value(fields.actionTaken);
+      const resubmittedOn = noteDate(fields.resubmissionDate);
+      const timelyFiling = noteDate(fields.timelyFilingDeadline);
 
       return join(
         `${prefix}No claim on file.`,
         checkedOn ? `Checked on ${checkedOn}.` : undefined,
         action ? `${action}.` : undefined,
+        resubmittedOn ? `Resubmitted on ${resubmittedOn}.` : undefined,
+        // Worth stating last: it is the deadline the follow-up is racing.
+        timelyFiling ? `Timely filing deadline: ${timelyFiling}.` : undefined,
         contact,
         howChecked,
       );

@@ -3,6 +3,12 @@ import { StatusCategory } from "@/lib/generated/prisma/enums";
 /**
  * EOB entry statuses. Same three-category model as AR, but its own label set —
  * a denial worklist resolves differently from an aged claim.
+ *
+ * Three labels were consolidated away in the eob_status_consolidation
+ * migration: "Corrected and Resubmitted" folded into "Resubmitted" (the note
+ * detail carries the distinction), "Awaiting Info from Practice" into "Check
+ * with Office", and "Duplicate — Ignore" became "Duplicate". The AR module
+ * keeps its own "Corrected and Resubmitted" — that list is separate.
  */
 
 export const EOB_RED_STATUSES = [
@@ -13,18 +19,14 @@ export const EOB_RED_STATUSES = [
   "Need to Call",
 ] as const;
 
-export const EOB_BLUE_STATUSES = [
-  "Check with Office",
-  "Awaiting Info from Practice",
-] as const;
+export const EOB_BLUE_STATUSES = ["Check with Office"] as const;
 
 export const EOB_GREEN_STATUSES = [
   "Resubmitted",
   "Appeal Submitted",
-  "Corrected and Resubmitted",
   "Written Off",
   "Resolved",
-  "Duplicate — Ignore",
+  "Duplicate",
 ] as const;
 
 export type EobStatusLabel =
@@ -69,17 +71,13 @@ export function isKnownEobStatus(label: string): label is EobStatusLabel {
 }
 
 /**
- * Statuses that close an entry out. "Written Off" and "Duplicate — Ignore"
- * count: the work is finished either way, even without money recovered.
+ * Statuses that close an entry out. "Written Off" and "Duplicate" count: the
+ * work is finished either way, even without money recovered.
+ *
+ * Derived from the green list rather than repeated, so consolidating a status
+ * cannot leave the two disagreeing.
  */
-const RESOLVING_STATUSES = new Set<string>([
-  "Resubmitted",
-  "Appeal Submitted",
-  "Corrected and Resubmitted",
-  "Written Off",
-  "Resolved",
-  "Duplicate — Ignore",
-]);
+const RESOLVING_STATUSES = new Set<string>(EOB_GREEN_STATUSES);
 
 export function isResolvingStatus(label: string): boolean {
   return RESOLVING_STATUSES.has(label.trim());

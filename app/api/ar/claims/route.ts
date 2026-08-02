@@ -14,6 +14,33 @@ import { startOfTodayUtc } from "@/lib/ar-stats";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { listClaimsQuerySchema } from "@/lib/validations/ar";
+import type { Prisma } from "@/lib/generated/prisma/client";
+
+/** Aging descending is the working order; the rest are opt-in. */
+function claimOrderBy(
+  sort: string | undefined,
+  direction: "asc" | "desc" = "asc",
+): Prisma.ArClaimOrderByWithRelationInput[] {
+  switch (sort) {
+    case "patientName":
+      return [{ patientName: direction }];
+    case "provider":
+      // renderingProvider is the specific name; providerName is the fallback
+      // the column displays, so both order together.
+      return [
+        { renderingProvider: { sort: direction, nulls: "last" } },
+        { providerName: { sort: direction, nulls: "last" } },
+      ];
+    case "balance":
+      return [{ balance: direction }];
+    case "status":
+      return [{ statusCategory: direction }, { statusLabel: direction }];
+    case "aging":
+      return [{ agingDays: direction }, { patientName: "asc" }];
+    default:
+      return [{ agingDays: "desc" }, { patientName: "asc" }];
+  }
+}
 
 /** GET /api/ar/claims — paginated claim list for one batch. */
 export async function GET(request: NextRequest) {
@@ -31,6 +58,10 @@ export async function GET(request: NextRequest) {
     statusCategory: searchParams.get("statusCategory") ?? undefined,
     statusLabel: searchParams.get("statusLabel") ?? undefined,
     insuranceName: searchParams.get("insuranceName") ?? undefined,
+    insuranceNames: searchParams.get("insuranceNames") ?? undefined,
+    agingBuckets: searchParams.get("agingBuckets") ?? undefined,
+    sort: searchParams.get("sort") ?? undefined,
+    direction: searchParams.get("direction") ?? undefined,
     agingBucket: searchParams.get("agingBucket") ?? undefined,
     overdue: searchParams.get("overdue") ?? undefined,
   });
@@ -49,6 +80,13 @@ export async function GET(request: NextRequest) {
   const agingFilter = filters.agingBucket
     ? agingBucketFilter(filters.agingBucket)
     : undefined;
+
+  // Each selected bucket is a separate agingDays range; a claim qualifying for
+  // any of them qualifies. Unrecognised keys drop out rather than matching all.
+  const agingBucketRanges = (filters.agingBuckets ?? [])
+    .map((key) => agingBucketFilter(key))
+    .filter((range): range is NonNullable<typeof range> => range !== undefined)
+    .map((range) => ({ agingDays: range }));
 
   /**
    * Practice access is already checked above via canAccessBatch. Billers are
@@ -72,6 +110,11 @@ export async function GET(request: NextRequest) {
       ? { statusCategory: filters.statusCategory }
       : {}),
     ...(filters.statusLabel ? { statusLabel: filters.statusLabel } : {}),
+    ...(filters.insuranceNames
+      ? { insuranceName: { in: filters.insuranceNames } }
+      : {}),
+    // Each bucket is its own agingDays range, so several are an OR.
+    ...(agingBucketRanges.length > 0 ? { OR: agingBucketRanges } : {}),
     ...(filters.insuranceName
       ? { insuranceName: { contains: filters.insuranceName, mode: "insensitive" as const } }
       : {}),
@@ -88,7 +131,7 @@ export async function GET(request: NextRequest) {
   const [claims, total] = await Promise.all([
     prisma.arClaim.findMany({
       where,
-      orderBy: [{ agingDays: "desc" }, { patientName: "asc" }],
+      orderBy: claimOrderBy(filters.sort, filters.direction),
       skip: pagination.skip,
       take: pagination.take,
       include: CLAIM_INCLUDE,

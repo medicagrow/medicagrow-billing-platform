@@ -36,7 +36,10 @@ export async function GET(request: NextRequest) {
     search: searchParams.get("search") ?? undefined,
     from: searchParams.get("from") ?? undefined,
     to: searchParams.get("to") ?? undefined,
+    dueDateFrom: searchParams.get("dueDateFrom") ?? undefined,
+    dueDateTo: searchParams.get("dueDateTo") ?? undefined,
     overdue: searchParams.get("overdue") ?? undefined,
+    dueToday: searchParams.get("dueToday") ?? undefined,
     isRecurring: searchParams.get("isRecurring") ?? undefined,
     isShared: searchParams.get("isShared") ?? undefined,
     sort: searchParams.get("sort") ?? undefined,
@@ -50,15 +53,32 @@ export async function GET(request: NextRequest) {
   const filters = query.data;
   const pagination = parsePagination(searchParams);
 
+  const rangeFrom = filters.dueDateFrom ?? filters.from;
+  const rangeTo = filters.dueDateTo ?? filters.to;
+
   const dateRange =
-    filters.from || filters.to
+    rangeFrom || rangeTo
       ? {
-          ...(filters.from ? { gte: dayStart(filters.from) } : {}),
-          ...(filters.to
-            ? { lte: new Date(dayStart(filters.to).getTime() + 86_399_999) }
+          ...(rangeFrom ? { gte: dayStart(rangeFrom) } : {}),
+          ...(rangeTo
+            ? { lte: new Date(dayStart(rangeTo).getTime() + 86_399_999) }
             : {}),
         }
       : undefined;
+
+  // Overdue is strictly before today; "today" is everything due by the end of
+  // it. Both mean outstanding, so both exclude closed.
+  const openStatuses = [TodoStatus.OPEN, TodoStatus.IN_PROCESS, TodoStatus.HOLD];
+
+  const quickFilter =
+    filters.overdue === "true"
+      ? { dueDate: { lt: dayStart() }, status: { in: openStatuses } }
+      : filters.dueToday === "true"
+        ? {
+            dueDate: { lte: new Date(dayStart().getTime() + 86_399_999) },
+            status: { in: openStatuses },
+          }
+        : undefined;
 
   const where = {
     ...todoVisibilityFilter(session!.user),
@@ -77,12 +97,8 @@ export async function GET(request: NextRequest) {
       : {}),
     ...(filters.isShared ? { isShared: filters.isShared === "true" } : {}),
     ...(dateRange ? { dueDate: dateRange } : {}),
-    ...(filters.overdue === "true"
-      ? {
-          dueDate: { lt: dayStart() },
-          status: { in: [TodoStatus.OPEN, TodoStatus.IN_PROCESS] },
-        }
-      : {}),
+    // Applied last so a quick filter's date bound wins over the range inputs.
+    ...(quickFilter ?? {}),
   };
 
   const direction = filters.direction ?? "asc";

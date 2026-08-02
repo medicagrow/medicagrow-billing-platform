@@ -15,7 +15,12 @@ import { generateInitialInstances } from "@/lib/task/recurrence";
 import { dayStart } from "@/lib/todo/access";
 import { createTaskSchema, listTasksQuerySchema } from "@/lib/validations/task";
 
-const OPEN_STATUSES = [TaskStatus.OPEN, TaskStatus.IN_PROCESS];
+/**
+ * Overdue means past due and not finished. A held task still counts: the work
+ * is parked, not done, and its release date says it is coming back. The Team
+ * page counts the same way so its Overdue link shows the number it advertises.
+ */
+const NOT_CLOSED = [TaskStatus.OPEN, TaskStatus.IN_PROCESS, TaskStatus.HOLD];
 
 /** Occurrences generated up front when a recurring task is created. */
 const INITIAL_INSTANCES = 3;
@@ -81,7 +86,7 @@ export async function GET(request: NextRequest) {
       : {}),
     ...(dateRange ? { dueDate: dateRange } : {}),
     ...(filters.overdue === "true"
-      ? { dueDate: { lt: dayStart() }, status: { in: OPEN_STATUSES } }
+      ? { dueDate: { lt: dayStart() }, status: { in: NOT_CLOSED } }
       : {}),
   };
 

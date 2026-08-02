@@ -28,6 +28,12 @@ export const eobEntryInputSchema = z.object({
   rejectionReason: optionalText(300),
   actionRequired: optionalText(300),
   arClaimId: optionalText(40),
+  /**
+   * Required: an entry nobody owns sits in the flat list unworked. The poster
+   * defaults to themselves, and the route re-checks that the person actually
+   * belongs to the practice.
+   */
+  assignedToId: z.string().min(1, "Each entry needs an assignee"),
 });
 
 export const createEobBatchSchema = z.object({

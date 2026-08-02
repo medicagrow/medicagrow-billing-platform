@@ -482,6 +482,28 @@ export function WorkNoteForm({
               onChange={(event) => set("checkedDate", event.target.value)}
             />
           </Field>
+          <Field
+            label="Timely Filing Deadline"
+            htmlFor="timelyFilingDeadline"
+            hint="Past this date the claim is unbillable — track it before it lapses."
+          >
+            <Input
+              id="timelyFilingDeadline"
+              type="date"
+              value={fields.timelyFilingDeadline ?? ""}
+              onChange={(event) =>
+                set("timelyFilingDeadline", event.target.value)
+              }
+            />
+          </Field>
+          <Field label="Resubmission Date" htmlFor="resubmissionDate">
+            <Input
+              id="resubmissionDate"
+              type="date"
+              value={fields.resubmissionDate ?? ""}
+              onChange={(event) => set("resubmissionDate", event.target.value)}
+            />
+          </Field>
           <Field label="Action taken" htmlFor="actionTaken">
             <Select
               id="actionTaken"

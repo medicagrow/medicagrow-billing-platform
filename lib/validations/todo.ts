@@ -85,7 +85,12 @@ export const listTodosQuerySchema = z.object({
   search: z.string().optional(),
   from: z.string().optional(),
   to: z.string().optional(),
+  /** Aliases of from/to, matching the task API's naming. */
+  dueDateFrom: z.string().optional(),
+  dueDateTo: z.string().optional(),
   overdue: z.enum(["true", "false"]).optional(),
+  /** Everything due by the end of today and not yet closed. */
+  dueToday: z.enum(["true", "false"]).optional(),
   isRecurring: z.enum(["true", "false"]).optional(),
   isShared: z.enum(["true", "false"]).optional(),
   sort: z

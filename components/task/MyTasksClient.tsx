@@ -12,6 +12,11 @@ import {
   type TaskTypeOption,
 } from "@/components/task/TaskFormFields";
 import { Badge } from "@/components/ui/Badge";
+import {
+  DueDateFilters,
+  dueDateParams,
+  type DueQuickFilter,
+} from "@/components/ui/DueDateFilters";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
@@ -65,13 +70,21 @@ export function MyTasksClient({
   const [priorityFilter, setPriorityFilter] = useState("");
   const [practiceFilter, setPracticeFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
+  const [dueQuick, setDueQuick] = useState<DueQuickFilter>("none");
+  const [dueFrom, setDueFrom] = useState("");
+  const [dueTo, setDueTo] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
 
     try {
+      const params = new URLSearchParams({
+        pageSize: "100",
+        ...dueDateParams(dueQuick, dueFrom, dueTo),
+      });
+
       // my-tasks also releases anything whose hold expired.
-      const response = await fetch("/api/tasks/my-tasks?pageSize=100");
+      const response = await fetch(`/api/tasks/my-tasks?${params.toString()}`);
       if (response.ok) {
         const payload = await response.json();
         setTasks(payload.data);
@@ -79,7 +92,7 @@ export function MyTasksClient({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dueQuick, dueFrom, dueTo]);
 
   useEffect(() => {
     load();
@@ -180,6 +193,15 @@ export function MyTasksClient({
             </option>
           ))}
         </Select>
+
+        <DueDateFilters
+          quick={dueQuick}
+          onQuickChange={setDueQuick}
+          from={dueFrom}
+          to={dueTo}
+          onFromChange={setDueFrom}
+          onToChange={setDueTo}
+        />
 
         <div className="ml-auto">
           <Button onClick={() => setAddOpen(true)}>Add task</Button>
