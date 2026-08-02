@@ -67,6 +67,7 @@ export function TimeBlockModal({ onSaved }: { onSaved: () => void }) {
     TimeBlockType.TODO_WORK,
   );
 
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -148,6 +149,44 @@ export function TimeBlockModal({ onSaved }: { onSaved: () => void }) {
     }
   }
 
+  /**
+   * Bulk delete for the weekly template.
+   *
+   * Deleting a template row removes it from every future week, so the count
+   * is stated plainly in the bar rather than hidden behind an icon.
+   */
+  async function removeSelected() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+
+    setSaving(true);
+
+    try {
+      const results = await Promise.all(
+        ids.map((id) =>
+          fetch(`/api/time-blocks/${id}`, { method: "DELETE" }).then(
+            (response) => response.ok,
+          ),
+        ),
+      );
+
+      const failed = results.filter((ok) => !ok).length;
+
+      toast(
+        failed === 0
+          ? `${ids.length} block${ids.length === 1 ? "" : "s"} removed`
+          : `${ids.length - failed} removed, ${failed} failed`,
+        failed === 0 ? "success" : "error",
+      );
+
+      setSelected(new Set());
+      await loadAll();
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function removeBlock(blockId: string) {
     const response = await fetch(`/api/time-blocks/${blockId}`, {
       method: "DELETE",
@@ -192,6 +231,7 @@ export function TimeBlockModal({ onSaved }: { onSaved: () => void }) {
               onClick={() => {
                 setTab(item.key);
                 setError(null);
+                setSelected(new Set());
               }}
               className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
                 tab === item.key
@@ -324,10 +364,50 @@ export function TimeBlockModal({ onSaved }: { onSaved: () => void }) {
             {saving ? "Adding…" : "Add block"}
           </Button>
 
+          {selected.size > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-inset ring-slate-200">
+              <span className="text-sm text-slate-600">
+                {selected.size} selected
+              </span>
+              <Button
+                onClick={removeSelected}
+                disabled={saving}
+                className="bg-red-600 hover:bg-red-700"
+              >
+                {saving ? "Deleting…" : "Delete Selected"}
+              </Button>
+              <button
+                type="button"
+                onClick={() => setSelected(new Set())}
+                className="text-sm text-slate-500 hover:text-slate-700"
+              >
+                Clear
+              </button>
+            </div>
+          ) : null}
+
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="w-full min-w-[560px] text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                 <tr>
+                  <th className="w-10 px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={
+                        rows.length > 0 &&
+                        rows.every((block) => selected.has(block.id))
+                      }
+                      onChange={(event) =>
+                        setSelected(
+                          event.target.checked
+                            ? new Set(rows.map((block) => block.id))
+                            : new Set(),
+                        )
+                      }
+                      aria-label="Select all blocks"
+                      className="h-4 w-4 rounded border-slate-300"
+                    />
+                  </th>
                   <th className="px-3 py-2">
                     {tab === "weekly" ? "Day" : "Date"}
                   </th>
@@ -341,7 +421,7 @@ export function TimeBlockModal({ onSaved }: { onSaved: () => void }) {
                 {rows.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={5}
+                      colSpan={6}
                       className="px-3 py-4 text-center text-sm text-slate-500"
                     >
                       {tab === "weekly"
@@ -352,6 +432,22 @@ export function TimeBlockModal({ onSaved }: { onSaved: () => void }) {
                 ) : (
                   rows.map((block) => (
                     <tr key={block.id}>
+                      <td className="px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(block.id)}
+                          onChange={(event) =>
+                            setSelected((current) => {
+                              const next = new Set(current);
+                              if (event.target.checked) next.add(block.id);
+                              else next.delete(block.id);
+                              return next;
+                            })
+                          }
+                          aria-label={`Select ${block.label}`}
+                          className="h-4 w-4 rounded border-slate-300"
+                        />
+                      </td>
                       <td className="whitespace-nowrap px-3 py-2 text-slate-700">
                         {block.dayOfWeek !== null
                           ? DAY_NAMES[block.dayOfWeek]

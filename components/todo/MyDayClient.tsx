@@ -1,29 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
-import { Input, Label } from "@/components/ui/Input";
 import { AddTodoModal } from "@/components/todo/AddTodoModal";
 import { BlockDayEditor } from "@/components/todo/BlockDayEditor";
+import {
+  BLOCK_COLORS,
+  DayScheduleGrid,
+  type ScheduleBlock,
+} from "@/components/todo/DayScheduleGrid";
+import { TodoEditPanel } from "@/components/todo/TodoEditPanel";
 import { TimeBlockModal } from "@/components/todo/TimeBlockModal";
-import { Select } from "@/components/ui/Select";
 import { useToast } from "@/components/ui/toast";
-import { TODO_STATUS_LABELS, type TodoDto } from "@/lib/todo-serialize";
+import type { TodoDto } from "@/lib/todo-serialize";
 import { TimeBlockType, TodoPriority, TodoStatus } from "@/lib/generated/prisma/enums";
-
-/** Schedule spans 6am to 8pm — the working window the day view renders. */
-const DAY_START_HOUR = 6;
-const DAY_END_HOUR = 20;
-
-const BLOCK_COLORS: Record<TimeBlockType, string> = {
-  FIXED: "bg-sky-500",
-  TODO_WORK: "bg-emerald-500",
-  BREAK: "bg-slate-400",
-  MEETING: "bg-violet-500",
-};
 
 const PRIORITY_VARIANT: Record<TodoPriority, "red" | "amber" | "sky" | "neutral"> = {
   URGENT: "red",
@@ -47,6 +40,11 @@ interface TimeBlockDto {
   overridesBlockId?: string | null;
 }
 
+const formatIsoDate = (iso: string) => {
+  const [year, month, day] = iso.split("-");
+  return `${month}/${day}/${year}`;
+};
+
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 /** Shifts a YYYY-MM-DD string by whole days, staying in UTC. */
@@ -62,17 +60,34 @@ interface UpcomingDay {
   minutes: number;
 }
 
-const toMinutes = (time: string) => {
-  const [hour, minute] = time.split(":").map(Number) as [number, number];
-  return hour * 60 + minute;
-};
-
 const formatMinutes = (minutes: number) => {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   if (hours === 0) return `${rest}m`;
   return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
 };
+
+/**
+ * When a todo is due, in the words a planner reads.
+ *
+ * Compared as YYYY-MM-DD strings against the real today — not the viewed day,
+ * since "overdue" means overdue now regardless of which day is on screen.
+ */
+function DueDateLine({ dueDate }: { dueDate: string | null }) {
+  if (!dueDate) return null;
+
+  const due = dueDate.slice(0, 10);
+  const now = todayIso();
+
+  const [tone, text] =
+    due === now
+      ? ["text-emerald-600", "Due today"]
+      : due < now
+        ? ["text-red-600", `Overdue — ${formatIsoDate(due)}`]
+        : ["text-slate-500", formatIsoDate(due)];
+
+  return <p className={`mt-0.5 text-xs ${tone}`}>{text}</p>;
+}
 
 export function MyDayClient({
   practices,
@@ -97,11 +112,36 @@ export function MyDayClient({
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dayHasOverrides, setDayHasOverrides] = useState(false);
+  const [hiddenBlockCount, setHiddenBlockCount] = useState(0);
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
-  // The day being viewed. Past days are read-only; today and later are not.
-  const [viewDate, setViewDate] = useState(todayIso());
+  /**
+   * The viewed day lives in the URL, so a particular day can be linked,
+   * bookmarked and reached with the back button. An absent or malformed
+   * ?date= falls back to today rather than erroring.
+   */
+  const searchParams = useSearchParams();
+  const dateParam = searchParams.get("date");
+
+  const viewDate =
+    dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : todayIso();
+
+  const setViewDate = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+
+      // Today is the default, so it needs no param cluttering the URL.
+      if (next === todayIso()) params.delete("date");
+      else params.set("date", next);
+
+      const query = params.toString();
+      router.push(query ? `/todos?${query}` : "/todos");
+    },
+    [router, searchParams],
+  );
+
+  const canSubAssign = assignableUsers.length > 1;
 
   const today = viewDate;
   const isToday = viewDate === todayIso();
@@ -124,6 +164,7 @@ export function MyDayClient({
         setBlocks(payload.blocks);
         setCapacity(payload.capacity);
         setDayHasOverrides(payload.hasOverrides ?? false);
+        setHiddenBlockCount(payload.hiddenBlockCount ?? 0);
       }
 
       if (upcomingRes.ok) {
@@ -178,13 +219,6 @@ export function MyDayClient({
     router.refresh();
   }
 
-  const totalHours = DAY_END_HOUR - DAY_START_HOUR;
-
-  const todoWorkBlocks = useMemo(
-    () => blocks.filter((block) => block.blockType === TimeBlockType.TODO_WORK),
-    [blocks],
-  );
-
   const todayLabel = new Date(`${today}T00:00:00.000Z`).toLocaleDateString(
     undefined,
     { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" },
@@ -213,7 +247,7 @@ export function MyDayClient({
 
   /** Removes a block from this date: an override for template rows, an
    *  outright delete for a one-off that only ever applied here. */
-  async function removeBlockForDay(block: TimeBlockDto) {
+  async function removeBlockForDay(block: ScheduleBlock) {
     if (block.specificDate && !block.overridesBlockId) {
       const response = await fetch(`/api/time-blocks/${block.id}`, {
         method: "DELETE",
@@ -256,7 +290,7 @@ export function MyDayClient({
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setViewDate((current) => shiftDate(current, -1))}
+              onClick={() => setViewDate(shiftDate(viewDate, -1))}
               className="rounded-md px-2 py-1 text-sm text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50"
               aria-label="Previous day"
             >
@@ -265,7 +299,7 @@ export function MyDayClient({
             <span className="text-sm text-slate-700">{todayLabel}</span>
             <button
               type="button"
-              onClick={() => setViewDate((current) => shiftDate(current, 1))}
+              onClick={() => setViewDate(shiftDate(viewDate, 1))}
               className="rounded-md px-2 py-1 text-sm text-slate-500 ring-1 ring-inset ring-slate-200 hover:bg-slate-50"
               aria-label="Next day"
             >
@@ -296,15 +330,7 @@ export function MyDayClient({
             <h3 className="text-sm font-semibold text-slate-900">
               {isToday ? "Today's schedule" : "Schedule"}
             </h3>
-            {dayHasOverrides && !isPast ? (
-              <button
-                type="button"
-                onClick={restoreDefaults}
-                className="text-xs font-medium text-brand-700 hover:text-brand-800"
-              >
-                Restore defaults
-              </button>
-            ) : null}
+
           </div>
 
           <div className="p-4">
@@ -314,56 +340,29 @@ export function MyDayClient({
                 description="Set up your standard day once and it repeats every week."
               />
             ) : (
-              <div
-                className="relative rounded-lg bg-slate-50 ring-1 ring-inset ring-slate-200"
-                style={{ height: `${totalHours * 44}px` }}
-              >
-                {Array.from({ length: totalHours + 1 }).map((_, index) => (
-                  <div
-                    key={index}
-                    className="absolute left-0 right-0 border-t border-slate-200/70"
-                    style={{ top: `${index * 44}px` }}
-                  >
-                    <span className="absolute -top-2 left-1 bg-slate-50 px-1 text-[10px] text-slate-400">
-                      {String(DAY_START_HOUR + index).padStart(2, "0")}:00
-                    </span>
-                  </div>
-                ))}
-
-                {blocks.map((block) => {
-                  const start = toMinutes(block.startTime) - DAY_START_HOUR * 60;
-                  const end = toMinutes(block.endTime) - DAY_START_HOUR * 60;
-                  const top = (start / 60) * 44;
-                  const height = Math.max(18, ((end - start) / 60) * 44);
-
-                  const plannedHere =
-                    block.blockType === TimeBlockType.TODO_WORK
-                      ? todos.filter((todo) => todo.status !== TodoStatus.CLOSED).length
-                      : 0;
-
-                  return (
-                    <div
-                      key={block.id}
-                      className={`absolute left-12 right-2 rounded-md px-2 py-1 text-[11px] text-white shadow-sm ${BLOCK_COLORS[block.blockType]}`}
-                      style={{ top: `${top}px`, height: `${height}px` }}
-                      title={`${block.startTime}–${block.endTime} ${block.label}`}
-                    >
-                      <span className="block truncate font-medium">
-                        {block.label}
-                      </span>
-                      <span className="block truncate opacity-90">
-                        {block.startTime}–{block.endTime}
-                        {block.blockType === TimeBlockType.TODO_WORK &&
-                        todoWorkBlocks.length === 1 &&
-                        plannedHere > 0
-                          ? ` · ${plannedHere} planned`
-                          : ""}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+              <DayScheduleGrid
+                blocks={blocks}
+                readOnly={isPast}
+                onEdit={(block) => setEditingBlockId(block.id)}
+                onRemove={removeBlockForDay}
+              />
             )}
+
+            {dayHasOverrides && !isPast ? (
+              <p className="mt-2 text-xs text-slate-500">
+                {hiddenBlockCount > 0
+                  ? `${hiddenBlockCount} block${hiddenBlockCount === 1 ? "" : "s"} hidden today`
+                  : "This day differs from your weekly schedule"}
+                {" — "}
+                <button
+                  type="button"
+                  onClick={restoreDefaults}
+                  className="font-medium text-brand-700 hover:text-brand-800"
+                >
+                  Restore all
+                </button>
+              </p>
+            ) : null}
 
             {blocks.length > 0 && !isPast ? (
               <ul className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
@@ -572,6 +571,8 @@ export function MyDayClient({
                             </span>
                           </button>
 
+                          <DueDateLine dueDate={todo.dueDate} />
+
                           <div className="mt-1 flex flex-wrap items-center gap-1.5">
                             <Badge variant={PRIORITY_VARIANT[todo.priority]}>
                               {todo.priority}
@@ -589,9 +590,7 @@ export function MyDayClient({
                             ) : null}
                           </div>
 
-                          {expanded === todo.id ? (
-                            <TodoDetail todo={todo} onChanged={load} />
-                          ) : null}
+
                         </div>
 
                         <Button
@@ -604,6 +603,22 @@ export function MyDayClient({
                           {expanded === todo.id ? "Close" : "Edit"}
                         </Button>
                       </div>
+
+                      {/* The same panel the list view uses — one edit surface,
+                          so the two cannot drift on which fields exist. */}
+                      {expanded === todo.id ? (
+                        <div className="-mx-3 -mb-3 mt-3">
+                          <TodoEditPanel
+                            todo={todo}
+                            practices={practices}
+                            assignableUsers={assignableUsers}
+                            canSubAssign={canSubAssign}
+                            currentUserId={userId}
+                            onSaved={load}
+                            onClose={() => setExpanded(null)}
+                          />
+                        </div>
+                      ) : null}
                     </li>
                   );
                 })}
@@ -627,201 +642,3 @@ export function MyDayClient({
   );
 }
 
-/* -------------------------------------------------------------------------- */
-
-function TodoDetail({
-  todo,
-  onChanged,
-}: {
-  todo: TodoDto;
-  onChanged: () => void;
-}) {
-  const { toast } = useToast();
-  const [note, setNote] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const [status, setStatus] = useState<TodoStatus>(todo.status);
-  const [priority, setPriority] = useState<TodoPriority>(todo.priority);
-  const [holdReleaseDate, setHoldReleaseDate] = useState(
-    todo.holdReleaseDate ? todo.holdReleaseDate.slice(0, 10) : "",
-  );
-  const [statusNote, setStatusNote] = useState("");
-  const [error, setError] = useState<string | null>(null);
-
-  /** Status saves immediately, with the optional note attached to the change. */
-  async function saveStatus() {
-    setError(null);
-
-    if (status === TodoStatus.HOLD && holdReleaseDate === "") {
-      setError("Putting a to do on hold requires a release date.");
-      return;
-    }
-
-    setSaving(true);
-
-    try {
-      const response = await fetch(`/api/todos/${todo.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status,
-          priority,
-          holdReleaseDate:
-            status === TodoStatus.HOLD ? holdReleaseDate : null,
-          note: statusNote || undefined,
-        }),
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        setError(payload?.error ?? "Could not save the change.");
-        return;
-      }
-
-      setStatusNote("");
-      toast("To do updated", "success");
-      onChanged();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function addNote() {
-    if (!note.trim()) return;
-    setSaving(true);
-
-    try {
-      const response = await fetch(`/api/todos/${todo.id}/notes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note: note.trim() }),
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        toast(payload?.error ?? "Could not add the note.", "error");
-        return;
-      }
-
-      setNote("");
-      toast("Note added");
-      onChanged();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="mt-2 space-y-2 border-t border-slate-100 pt-2">
-      {todo.description ? (
-        <p className="text-xs text-slate-600">{todo.description}</p>
-      ) : (
-        <p className="text-xs text-slate-400">No description.</p>
-      )}
-
-      <p className="text-[11px] text-slate-400">
-        {todo.noteCount} note{todo.noteCount === 1 ? "" : "s"} · created by{" "}
-        {todo.createdByName ?? "—"}
-      </p>
-
-      {error ? (
-        <p className="text-xs font-medium text-red-700">{error}</p>
-      ) : null}
-
-      <div className="grid gap-2 sm:grid-cols-2">
-        <div className="space-y-1">
-          <Label htmlFor={`todo-${todo.id}-status`}>
-            Status
-          </Label>
-          <Select
-            id={`todo-${todo.id}-status`}
-            value={status}
-            onChange={(event) => setStatus(event.target.value as TodoStatus)}
-            className="text-xs"
-          >
-            {Object.values(TodoStatus).map((option) => (
-              <option key={option} value={option}>
-                {TODO_STATUS_LABELS[option]}
-              </option>
-            ))}
-          </Select>
-        </div>
-
-        <div className="space-y-1">
-          <Label htmlFor={`todo-${todo.id}-priority`}>
-            Priority
-          </Label>
-          <Select
-            id={`todo-${todo.id}-priority`}
-            value={priority}
-            onChange={(event) =>
-              setPriority(event.target.value as TodoPriority)
-            }
-            className="text-xs"
-          >
-            {Object.values(TodoPriority).map((option) => (
-              <option key={option} value={option}>
-                {option.charAt(0) + option.slice(1).toLowerCase()}
-              </option>
-            ))}
-          </Select>
-        </div>
-
-        {/* A held to do must say when it comes back, or it disappears. */}
-        {status === TodoStatus.HOLD ? (
-          <div className="space-y-1">
-            <Label htmlFor={`todo-${todo.id}-hold`}>
-              Release from hold on
-            </Label>
-            <Input
-              id={`todo-${todo.id}-hold`}
-              type="date"
-              value={holdReleaseDate}
-              onChange={(event) => setHoldReleaseDate(event.target.value)}
-              className="text-xs"
-            />
-          </div>
-        ) : null}
-
-        <div className="space-y-1">
-          <Label htmlFor={`todo-${todo.id}-note`}>
-            Note for this change (optional)
-          </Label>
-          <Input
-            id={`todo-${todo.id}-note`}
-            value={statusNote}
-            onChange={(event) => setStatusNote(event.target.value)}
-            placeholder="What changed and why"
-            className="text-xs"
-          />
-        </div>
-      </div>
-
-      <Button
-        className="px-2.5 py-1 text-xs"
-        onClick={saveStatus}
-        disabled={saving}
-      >
-        {saving ? "Saving…" : "Save"}
-      </Button>
-
-      <div className="flex gap-2">
-        <Input
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-          placeholder="Add a note…"
-          disabled={saving}
-          className="text-xs"
-        />
-        <Button
-          variant="secondary"
-          className="shrink-0 px-2.5 py-1 text-xs"
-          onClick={addNote}
-          disabled={saving || !note.trim()}
-        >
-          Add
-        </Button>
-      </div>
-    </div>
-  );
-}

@@ -92,20 +92,36 @@ export async function resolveDaySchedule(
   return resolved.sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 
-/** True when the date carries any override, i.e. "restore defaults" would do something. */
-export async function hasOverrides(
+export interface DayOverrideCounts {
+  /** Any override at all — i.e. "restore" would do something. */
+  any: boolean;
+  /** Template blocks suppressed for this date. */
+  hidden: number;
+  /** Template blocks replaced with different times for this date. */
+  replaced: number;
+}
+
+/** What has been changed about one day, so the UI can say so precisely. */
+export async function dayOverrideCounts(
   userId: string,
   date: Date,
-): Promise<boolean> {
+): Promise<DayOverrideCounts> {
   const start = dayStart(date.toISOString().slice(0, 10));
 
-  const count = await prisma.timeBlock.count({
+  const overrides = await prisma.timeBlock.findMany({
     where: {
       userId,
       specificDate: { gte: start, lte: dayEnd(start) },
       overridesBlockId: { not: null },
     },
+    select: { isHidden: true },
   });
 
-  return count > 0;
+  const hidden = overrides.filter((row) => row.isHidden).length;
+
+  return {
+    any: overrides.length > 0,
+    hidden,
+    replaced: overrides.length - hidden,
+  };
 }

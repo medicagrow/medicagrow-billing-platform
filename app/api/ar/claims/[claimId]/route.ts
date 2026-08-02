@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { BatchStatus } from "@/lib/generated/prisma/enums";
 import { apiErrorResponse, requireAuth } from "@/lib/api-helpers";
 import { canAccessBatch } from "@/lib/ar-access";
+import { matchProvider } from "@/lib/ar-provider-match";
 import { CLAIM_INCLUDE, toClaimDto } from "@/lib/ar-serialize";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
@@ -45,7 +46,20 @@ export async function GET(
           ehrSource: true,
           uploadedById: true,
           uploadedBy: { select: { id: true, name: true } },
-          practice: { select: { id: true, name: true } },
+          practice: {
+            select: {
+              id: true,
+              name: true,
+              billingAddressLine1: true,
+              billingAddressLine2: true,
+              billingCity: true,
+              billingState: true,
+              billingZip: true,
+              npi: true,
+              taxId: true,
+              medicarePtan: true,
+            },
+          },
         },
       },
       workNotes: {
@@ -58,6 +72,20 @@ export async function GET(
   if (!claim || !(await canAccessBatch(session!.user, claim.batchId))) {
     return apiErrorResponse("Claim not found.", 404);
   }
+
+  /**
+   * Match the claim's rendering provider against the practice's roster.
+   *
+   * The claim carries a name string from the EHR export; the roster carries
+   * first and last names. Comparison is case-insensitive on trimmed, collapsed
+   * whitespace — an export writing "Dr.  Jane   Smith" should still find
+   * "Jane Smith". Done in JS rather than SQL so the normalisation is one rule
+   * both sides go through, and the roster per practice is small.
+   */
+  const providerMatch = await matchProvider(
+    claim.batch.practice.id,
+    claim.renderingProvider,
+  );
 
   // Prior history (spec §7.4): same practice, closed batches, same insurance,
   // DOS within +/-7 days, fuzzy patient-name match. Reference only.
@@ -103,6 +131,19 @@ export async function GET(
         projectManagerName: claim.batch.uploadedBy.name,
       },
     },
+    practice: {
+      id: claim.batch.practice.id,
+      name: claim.batch.practice.name,
+      billingAddressLine1: claim.batch.practice.billingAddressLine1,
+      billingAddressLine2: claim.batch.practice.billingAddressLine2,
+      billingCity: claim.batch.practice.billingCity,
+      billingState: claim.batch.practice.billingState,
+      billingZip: claim.batch.practice.billingZip,
+      npi: claim.batch.practice.npi,
+      taxId: claim.batch.practice.taxId,
+      medicarePtan: claim.batch.practice.medicarePtan,
+    },
+    providerMatch,
     workNotes: claim.workNotes.map((note) => ({
       id: note.id,
       outcomeType: note.outcomeType,

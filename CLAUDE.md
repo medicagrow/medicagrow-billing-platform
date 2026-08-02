@@ -167,6 +167,9 @@ Tuesday" survives independently of the schedule.
 ```bash
 npx tsx scripts/test-tasks.ts       # hold-release automation
 npx tsx scripts/test-recurrence.ts  # recurrence dates, series generation, task types
+npx tsx scripts/test-timer.ts       # task timer, edit window, overlap rule
+npx tsx scripts/test-schedule.ts    # 24h grid geometry, provider roster match
+npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
 ```
 
 ### My Day scheduling
@@ -181,9 +184,19 @@ npx tsx scripts/test-recurrence.ts  # recurrence dates, series generation, task 
   these; `DELETE /api/time-blocks/overrides?date=` restores the template and
   deliberately leaves genuine one-off blocks alone.
 - The schedule modal has two tabs: **Weekly Template** (multi-select days,
-  with Weekdays/Weekend quick-picks, posting one row per day) and **Specific
-  Dates** (one-off blocks). Per-date overrides are not listed there — they
-  belong to the day being viewed and are edited inline.
+  with Weekdays/Weekend quick-picks, posting one row per day, and checkbox
+  bulk delete) and **Specific Dates** (one-off blocks). Per-date overrides are
+  not listed there — they belong to the day being viewed and are edited inline.
+- The grid covers a **full 24 hours** at one pixel per minute
+  ([components/todo/DayScheduleGrid.tsx](components/todo/DayScheduleGrid.tsx)),
+  scrolled to 07:00 on load. A block whose end time is at or before its start
+  has crossed midnight and renders as two segments, labelled "continues" and
+  "continued" — night-shift blocks used to be cut off entirely.
+- The viewed day is **URL state** (`/todos?date=YYYY-MM-DD`), so a day can be
+  linked and reached with the back button. Today carries no param. Past days
+  are read-only; today and later are editable.
+- **One edit surface for todos.** `TodoEditPanel` is used by both My Day and
+  the list view; there is deliberately no second, smaller panel.
 
 ## Project-wide coding conventions
 

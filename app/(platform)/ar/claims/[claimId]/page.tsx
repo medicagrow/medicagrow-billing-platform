@@ -3,6 +3,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AgingBadge } from "@/components/ar/AgingBadge";
 import { CopyNoteButton } from "@/components/ar/CopyNoteButton";
+import { ClaimContextPanels } from "@/components/ar/ClaimContextPanels";
+import { matchProvider } from "@/lib/ar-provider-match";
 import {
   PriorHistoryPanel,
   type PriorRecord,
@@ -69,7 +71,20 @@ export default async function ClaimDetailPage({
           ehrSource: true,
           uploadedById: true,
           uploadedBy: { select: { name: true } },
-          practice: { select: { id: true, name: true } },
+          practice: {
+            select: {
+              id: true,
+              name: true,
+              billingAddressLine1: true,
+              billingAddressLine2: true,
+              billingCity: true,
+              billingState: true,
+              billingZip: true,
+              npi: true,
+              taxId: true,
+              medicarePtan: true,
+            },
+          },
         },
       },
       workNotes: {
@@ -112,6 +127,12 @@ export default async function ClaimDetailPage({
       },
     },
   });
+
+  // Same matcher the API uses, so the panel and the endpoint agree.
+  const providerMatch = await matchProvider(
+    claim.batch.practice.id,
+    claim.renderingProvider,
+  );
 
   const priorHistory: PriorRecord[] = priorClaims.map((prior) => ({
     id: prior.id,
@@ -252,6 +273,13 @@ export default async function ClaimDetailPage({
               </Row>
             </dl>
           </div>
+
+          <ClaimContextPanels
+            claimId={claim.id}
+            practice={claim.batch.practice}
+            renderingProvider={claim.renderingProvider}
+            providerMatch={providerMatch}
+          />
 
           <PriorHistoryPanel records={priorHistory} />
         </div>

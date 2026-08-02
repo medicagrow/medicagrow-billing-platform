@@ -4,7 +4,7 @@ import { requireAuth } from "@/lib/api-helpers";
 import { PRIORITY_RANK, TODO_INCLUDE, toTodoDto } from "@/lib/todo-serialize";
 import { dayEnd, dayStart } from "@/lib/todo/access";
 import { checkHoldReleases } from "@/lib/todo/hold-release";
-import { hasOverrides, resolveDaySchedule } from "@/lib/todo/schedule";
+import { dayOverrideCounts, resolveDaySchedule } from "@/lib/todo/schedule";
 import { blockMinutes } from "@/lib/validations/todo";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
@@ -49,9 +49,9 @@ export async function GET(request: NextRequest) {
   });
 
   // The weekly template with this date's per-block overrides applied.
-  const [blocks, dayHasOverrides] = await Promise.all([
+  const [blocks, overrideCounts] = await Promise.all([
     resolveDaySchedule(session!.user.id, start),
-    hasOverrides(session!.user.id, start),
+    dayOverrideCounts(session!.user.id, start),
   ]);
 
   const availableMinutes = blocks
@@ -67,7 +67,8 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     date: start.toISOString().slice(0, 10),
-    hasOverrides: dayHasOverrides,
+    hasOverrides: overrideCounts.any,
+    hiddenBlockCount: overrideCounts.hidden,
     data: sorted,
     blocks: blocks.map((block) => ({
       id: block.id,
