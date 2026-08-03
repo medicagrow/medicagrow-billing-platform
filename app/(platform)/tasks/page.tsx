@@ -6,6 +6,7 @@ import {
   assignableUsersFor,
   taskPracticeOptions,
 } from "@/lib/task-options";
+import { Role } from "@/lib/generated/prisma/enums";
 import { requireUser } from "@/lib/session";
 
 export const metadata: Metadata = { title: "My Tasks" };
@@ -30,6 +31,7 @@ export default async function MyTasksPage() {
         practices={practices}
         assignableUsers={assignableUsers}
         taskTypes={taskTypes}
+        canEditEstimate={user.role !== Role.BILLER}
         currentUserId={user.id}
       />
     </div>

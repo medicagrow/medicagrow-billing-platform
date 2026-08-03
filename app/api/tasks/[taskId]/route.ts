@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { TaskStatus } from "@/lib/generated/prisma/enums";
+import { Role, TaskStatus } from "@/lib/generated/prisma/enums";
 import {
   apiErrorResponse,
   requireAuth,
@@ -114,7 +114,19 @@ export async function PATCH(
   if (input.dueDate !== undefined) {
     data.dueDate = input.dueDate ? dayStart(input.dueDate) : null;
   }
+  /**
+   * The estimate is the yardstick efficiency is measured against, so a biller
+   * cannot move it — that would let the person being measured set the target.
+   * Logging actual time stays theirs.
+   */
   if (input.estimatedMinutes !== undefined) {
+    if (session!.user.role === Role.BILLER) {
+      return apiErrorResponse(
+        "Only a project manager or owner can change the time estimate.",
+        403,
+      );
+    }
+
     data.estimatedMinutes = input.estimatedMinutes;
   }
   if (input.priority !== undefined) data.priority = input.priority;

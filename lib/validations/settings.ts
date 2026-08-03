@@ -43,6 +43,12 @@ export const updatePracticeSchema = z
     contactPhone: optionalPhoneSchema,
     contactFax: optionalPhoneSchema,
     contactEmail: optionalEmailSchema,
+
+    /** Empty string clears the assignment. The route checks the role. */
+    primaryPmId: z
+      .union([z.string(), z.null(), z.undefined()])
+      .transform((value) => (value ?? "").trim() || null)
+      .optional(),
   })
   .partial();
 

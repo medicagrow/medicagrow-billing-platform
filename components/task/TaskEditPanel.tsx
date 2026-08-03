@@ -12,6 +12,7 @@ import { NumericInput } from "@/components/ui/inputs/NumericInput";
 import { Select } from "@/components/ui/Select";
 import { useToast } from "@/components/ui/toast";
 import { formatDate, formatUSD } from "@/lib/format";
+import { formatMinutes } from "@/lib/task-timer-serialize";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
 import {
   AUTO_SOURCE_NOTE,
@@ -30,11 +31,14 @@ import type { TaskDto, TaskNoteDto } from "@/lib/task-serialize";
 export function TaskEditPanel({
   task,
   currentUserId,
+  canEditEstimate = false,
   onSaved,
   onClose,
 }: {
   task: TaskDto;
   currentUserId: string;
+  /** The estimate is the yardstick, so only PM/Owner may move it. */
+  canEditEstimate?: boolean;
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -46,6 +50,9 @@ export function TaskEditPanel({
   );
   const [priority, setPriority] = useState<TodoPriority>(task.priority);
   const [statusNote, setStatusNote] = useState("");
+  const [estimatedMinutes, setEstimatedMinutes] = useState(
+    task.estimatedMinutes === null ? "" : String(task.estimatedMinutes),
+  );
   const [actualMinutes, setActualMinutes] = useState(
     task.actualMinutes === null ? "" : String(task.actualMinutes),
   );
@@ -98,6 +105,12 @@ export function TaskEditPanel({
           holdReleaseDate:
             status === TaskStatus.HOLD ? holdReleaseDate : null,
           note: statusNote || undefined,
+          ...(canEditEstimate
+            ? {
+                estimatedMinutes:
+                  estimatedMinutes === "" ? null : Number(estimatedMinutes),
+              }
+            : {}),
           // Only meaningful on close; sending it otherwise would record time
           // against work still in flight.
           ...(status === TaskStatus.CLOSED && actualMinutes !== ""
@@ -349,6 +362,29 @@ export function TaskEditPanel({
               ) : null}
             </div>
           ) : null}
+
+          <div className="space-y-1.5">
+            <Label htmlFor={`task-${task.id}-estimate`}>Estimated Time</Label>
+            {canEditEstimate ? (
+              <>
+                <NumericInput
+                  id={`task-${task.id}-estimate`}
+                  maxLength={4}
+                  value={estimatedMinutes}
+                  onChange={setEstimatedMinutes}
+                  placeholder="—"
+                />
+                <p className="text-xs text-slate-500">minutes</p>
+              </>
+            ) : (
+              <p className="text-sm text-slate-700">
+                Est:{" "}
+                {task.estimatedMinutes === null
+                  ? "not set"
+                  : formatMinutes(task.estimatedMinutes)}
+              </p>
+            )}
+          </div>
 
           <div className="space-y-1.5">
             <Label htmlFor={`task-${task.id}-status-note`}>

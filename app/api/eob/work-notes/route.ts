@@ -11,6 +11,7 @@ import {
 import { canAccessPractice } from "@/lib/ar-access";
 import { EOB_ENTRY_INCLUDE, toEobEntryDto } from "@/lib/eob-serialize";
 import { isResolvingStatus } from "@/lib/eob-status";
+import { resolveEscalationTarget } from "@/lib/escalation";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { createEobWorkNoteSchema } from "@/lib/validations/eob";
@@ -56,13 +57,26 @@ export async function POST(request: NextRequest) {
     return apiErrorResponse("This entry is not assigned to you.", 403);
   }
 
-  // Blue hands the entry back to whoever posted the batch, mirroring AR.
+  /**
+   * Blue hands the entry to whoever owns the practice relationship — its
+   * primary PM, else whoever posted the batch, else an owner. The same chain
+   * AR uses, from the same resolver.
+   */
   const goesBlue = input.statusCategoryChangedTo === StatusCategory.BLUE;
   const explicitAssignee =
     input.assignedToChangedId === undefined ? null : input.assignedToChangedId;
 
+  const escalation = goesBlue
+    ? await resolveEscalationTarget({
+        practiceId: entry.batch.practiceId,
+        batchOwnerId: entry.batch.postedById,
+      })
+    : null;
+
+  // With nobody to escalate to, the entry keeps its current assignee rather
+  // than being orphaned.
   const nextAssigneeId = goesBlue
-    ? entry.batch.postedById
+    ? (escalation?.userId ?? entry.assignedToId)
     : (explicitAssignee ?? entry.assignedToId);
 
   const assignmentChanged = nextAssigneeId !== entry.assignedToId;
@@ -103,9 +117,9 @@ export async function POST(request: NextRequest) {
 
   let reassignedToName: string | null = null;
 
-  if (goesBlue && assignmentChanged) {
+  if (goesBlue && assignmentChanged && nextAssigneeId) {
     const pm = await prisma.user.findUnique({
-      where: { id: entry.batch.postedById },
+      where: { id: nextAssigneeId },
       select: { name: true },
     });
     reassignedToName = pm?.name ?? null;

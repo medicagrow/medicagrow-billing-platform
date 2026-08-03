@@ -54,11 +54,14 @@ export function MyTasksClient({
   practices,
   assignableUsers,
   taskTypes,
+  canEditEstimate,
   currentUserId,
 }: {
   practices: { id: string; name: string }[];
   assignableUsers: { id: string; name: string }[];
   taskTypes: TaskTypeOption[];
+  /** The estimate is the yardstick, so only PM/Owner may move it. */
+  canEditEstimate: boolean;
   currentUserId: string;
 }) {
   const [tasks, setTasks] = useState<TaskDto[]>([]);
@@ -294,6 +297,7 @@ export function MyTasksClient({
                   <TaskEditPanel
                     task={task}
                     currentUserId={currentUserId}
+                    canEditEstimate={canEditEstimate}
                     onSaved={load}
                     onClose={() => setExpandedId(null)}
                   />

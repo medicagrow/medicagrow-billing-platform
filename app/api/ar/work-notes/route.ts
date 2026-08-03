@@ -10,6 +10,7 @@ import {
 } from "@/lib/generated/prisma/enums";
 import { apiErrorResponse, requireAuth, zodErrorResponse } from "@/lib/api-helpers";
 import { canAccessBatch } from "@/lib/ar-access";
+import { resolveEscalationTarget } from "@/lib/escalation";
 import { generateNote, type NoteFields } from "@/lib/ar-note-format";
 import { CLAIM_INCLUDE, toClaimDto } from "@/lib/ar-serialize";
 import { prisma } from "@/lib/prisma";
@@ -39,7 +40,9 @@ export async function POST(request: NextRequest) {
       batchId: true,
       claimNumber: true,
       assignedToId: true,
-      batch: { select: { status: true, uploadedById: true } },
+      batch: {
+        select: { status: true, uploadedById: true, practiceId: true },
+      },
     },
   });
 
@@ -78,13 +81,26 @@ export async function POST(request: NextRequest) {
     ? new Date(`${input.followUpDateSet}T00:00:00.000Z`)
     : null;
 
-  // Blue status hands the claim back to the PM who uploaded the batch.
+  /**
+   * Blue status hands the claim to whoever owns the practice relationship:
+   * its primary PM, else whoever uploaded the batch, else an owner.
+   */
   const goesBlue = input.statusCategoryChangedTo === StatusCategory.BLUE;
-  const nextAssigneeId = goesBlue
-    ? claim.batch.uploadedById
-    : claim.assignedToId;
 
-  const reassigned = goesBlue && claim.assignedToId !== claim.batch.uploadedById;
+  const escalation = goesBlue
+    ? await resolveEscalationTarget({
+        practiceId: claim.batch.practiceId,
+        batchOwnerId: claim.batch.uploadedById,
+      })
+    : null;
+
+  // With nobody to escalate to, the claim keeps its current assignee rather
+  // than being orphaned.
+  const nextAssigneeId = escalation?.userId ?? claim.assignedToId;
+  const reassigned =
+    goesBlue &&
+    nextAssigneeId !== null &&
+    claim.assignedToId !== nextAssigneeId;
 
   const [, updatedClaim] = await prisma.$transaction([
     prisma.arWorkNote.create({
@@ -109,7 +125,9 @@ export async function POST(request: NextRequest) {
         lastWorkedAt: new Date(),
         lastWorkedById: session!.user.id,
         ...(followUpDate ? { followUpDate } : {}),
-        ...(goesBlue ? { assignedToId: nextAssigneeId } : {}),
+        ...(goesBlue && escalation?.userId
+          ? { assignedToId: escalation.userId }
+          : {}),
       },
       include: CLAIM_INCLUDE,
     }),
@@ -122,9 +140,9 @@ export async function POST(request: NextRequest) {
 
   let reassignedToName: string | null = null;
 
-  if (reassigned) {
+  if (reassigned && nextAssigneeId) {
     const pm = await prisma.user.findUnique({
-      where: { id: claim.batch.uploadedById },
+      where: { id: nextAssigneeId },
       select: { name: true },
     });
     reassignedToName = pm?.name ?? null;

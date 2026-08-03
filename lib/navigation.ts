@@ -222,6 +222,19 @@ export const taskSubNav: SubNavItem[] = [
   },
 ];
 
+export const productivitySubNav: SubNavItem[] = [
+  {
+    label: "Team",
+    href: "/productivity",
+    roles: [Role.OWNER, Role.PROJECT_MANAGER],
+  },
+  {
+    label: "Time Logs",
+    href: "/productivity/time-logs",
+    roles: [Role.OWNER, Role.PROJECT_MANAGER],
+  },
+];
+
 /** Sub-navigation keyed by the parent nav item's href. */
 const SUB_NAV_BY_PARENT: Record<string, SubNavItem[]> = {
   "/ar": arSubNav,
@@ -229,6 +242,7 @@ const SUB_NAV_BY_PARENT: Record<string, SubNavItem[]> = {
   "/tracker": trackerSubNav,
   "/tasks": taskSubNav,
   "/todos": todoSubNav,
+  "/productivity": productivitySubNav,
   "/settings": settingsSubNav,
 };
 

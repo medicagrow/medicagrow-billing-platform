@@ -103,6 +103,8 @@ model User {
   timeEditsRequested   TaskTimeEditRequest[] @relation("TimeEditRequestedBy")
   timeEditsReviewed    TaskTimeEditRequest[] @relation("TimeEditReviewedBy")
 
+  practicesManaged Practice[] @relation("PracticePrimaryPm")
+
   trackerConfigUpdates TrackerConfig[] @relation("TrackerConfigUpdatedBy")
 
   @@index([role])
@@ -133,9 +135,14 @@ model Practice {
   contactFax        String? // 10 digits
   contactEmail      String?
 
+  /// The PM who owns this practice. Escalations (BLUE status) route here
+  /// before falling back to whoever uploaded or posted the batch.
+  primaryPmId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  primaryPm      User?              @relation("PracticePrimaryPm", fields: [primaryPmId], references: [id], onDelete: SetNull)
   users          UserPractice[]
   arBatches      ArBatch[]
   providers      PracticeProvider[]
@@ -146,6 +153,7 @@ model Practice {
 
   @@index([ehrSource])
   @@index([isActive])
+  @@index([primaryPmId])
 }
 
 /// Rendering providers billing under a practice group.

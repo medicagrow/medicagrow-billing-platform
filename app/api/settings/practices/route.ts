@@ -26,6 +26,7 @@ export async function GET() {
       isActive: true,
       createdAt: true,
       _count: { select: { arBatches: true, users: true } },
+      primaryPm: { select: { name: true } },
     },
   });
 
@@ -38,6 +39,7 @@ export async function GET() {
       createdAt: practice.createdAt.toISOString(),
       batchCount: practice._count.arBatches,
       userCount: practice._count.users,
+      primaryPmName: practice.primaryPm?.name ?? null,
     })),
   });
 }

@@ -23,6 +23,7 @@ interface PracticeRow {
   createdAt: string;
   batchCount: number;
   userCount: number;
+  primaryPmName: string | null;
 }
 
 export function PracticesManager({ canEdit }: { canEdit: boolean }) {
@@ -165,6 +166,7 @@ export function PracticesManager({ canEdit }: { canEdit: boolean }) {
               <tr>
                 <th className="px-4 py-3">Practice</th>
                 <th className="px-4 py-3">EHR source</th>
+                <th className="px-4 py-3">Primary PM</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Batches</th>
                 <th className="px-4 py-3 text-right">Users</th>
@@ -180,6 +182,11 @@ export function PracticesManager({ canEdit }: { canEdit: boolean }) {
                   </td>
                   <td className="px-4 py-3 text-slate-600">
                     {EHR_SOURCE_LABELS[practice.ehrSource]}
+                  </td>
+                  <td className="px-4 py-3 text-slate-600">
+                    {practice.primaryPmName ?? (
+                      <span className="text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant={practice.isActive ? "brand" : "neutral"}>

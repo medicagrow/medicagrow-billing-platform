@@ -40,6 +40,12 @@ export interface PracticeDetail {
   contactPhone: string;
   contactFax: string;
   contactEmail: string;
+  primaryPmId: string;
+}
+
+export interface PmOption {
+  id: string;
+  name: string;
 }
 
 export interface ProviderRow {
@@ -85,10 +91,13 @@ function Field({
 export function PracticeDetailTabs({
   practice,
   providers: initialProviders,
+  projectManagers,
   canEdit,
 }: {
   practice: PracticeDetail;
   providers: ProviderRow[];
+  /** Only project managers may own a practice's escalations. */
+  projectManagers: PmOption[];
   canEdit: boolean;
 }) {
   const router = useRouter();
@@ -179,6 +188,7 @@ export function PracticeDetailTabs({
               name: form.name,
               ehrSource: form.ehrSource,
               isActive: form.isActive,
+              primaryPmId: form.primaryPmId,
               taxId: form.taxId,
               npi: form.npi,
               taxonomy: form.taxonomy,
@@ -213,6 +223,26 @@ export function PracticeDetailTabs({
                 {Object.values(EhrSource).map((source) => (
                   <option key={source} value={source}>
                     {EHR_SOURCE_LABELS[source]}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <Field
+              label="Primary Project Manager"
+              htmlFor="primaryPmId"
+              hint="This PM receives all escalated claims and EOB entries for this practice."
+            >
+              <Select
+                id="primaryPmId"
+                value={form.primaryPmId}
+                onChange={(event) => set("primaryPmId", event.target.value)}
+                disabled={!canEdit}
+              >
+                <option value="">Not assigned</option>
+                {projectManagers.map((pm) => (
+                  <option key={pm.id} value={pm.id}>
+                    {pm.name}
                   </option>
                 ))}
               </Select>

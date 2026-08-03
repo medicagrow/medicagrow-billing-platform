@@ -66,6 +66,32 @@ export async function PATCH(
     }
   }
 
+  /**
+   * Only a project manager may be the primary PM. Escalations route here, so
+   * pointing it at a biller would push practice-side questions into a queue
+   * whose owner cannot answer them.
+   */
+  if (body.data.primaryPmId) {
+    const pm = await prisma.user.findUnique({
+      where: { id: body.data.primaryPmId },
+      select: { role: true, isActive: true },
+    });
+
+    if (!pm || pm.role !== Role.PROJECT_MANAGER) {
+      return apiErrorResponse(
+        "The primary PM must be a project manager.",
+        422,
+      );
+    }
+
+    if (!pm.isActive) {
+      return apiErrorResponse(
+        "That project manager is deactivated.",
+        422,
+      );
+    }
+  }
+
   const practice = await prisma.practice.update({
     where: { id: params.practiceId },
     data: body.data,

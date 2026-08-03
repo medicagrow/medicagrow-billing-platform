@@ -38,6 +38,12 @@ export default async function PracticeDetailPage({
   if (!practice) notFound();
 
   // Stored normalised; formatted for display on the way in.
+  const projectManagers = await prisma.user.findMany({
+    where: { role: Role.PROJECT_MANAGER, isActive: true },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true },
+  });
+
   const detail: PracticeDetail = {
     id: practice.id,
     name: practice.name,
@@ -57,6 +63,7 @@ export default async function PracticeDetailPage({
     contactPhone: formatPhone(practice.contactPhone ?? ""),
     contactFax: formatPhone(practice.contactFax ?? ""),
     contactEmail: practice.contactEmail ?? "",
+    primaryPmId: practice.primaryPmId ?? "",
   };
 
   return (
@@ -81,6 +88,7 @@ export default async function PracticeDetailPage({
 
       <PracticeDetailTabs
         practice={detail}
+        projectManagers={projectManagers}
         providers={practice.providers.map((provider) => ({
           id: provider.id,
           firstName: provider.firstName,

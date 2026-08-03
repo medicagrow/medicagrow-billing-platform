@@ -19,13 +19,39 @@ import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/format";
+import { NumericInput } from "@/components/ui/inputs/NumericInput";
 import { formatMinutes } from "@/lib/task-timer-serialize";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
 import type { TaskDto } from "@/lib/task-serialize";
 
-type SortKey = "dueDate" | "priority" | "title" | "status" | "createdAt";
+type SortKey =
+  | "dueDate"
+  | "priority"
+  | "title"
+  | "status"
+  | "createdAt"
+  | "estimatedMinutes";
 
 const PAGE_SIZE = 50;
+
+/**
+ * Logged time against its estimate.
+ *
+ * Amber once it has gone past the estimate — that is worth seeing while the
+ * task is still open. Green only once a task is closed inside its estimate,
+ * since an open task under budget has not finished spending yet.
+ */
+function loggedTone(task: TaskDto): string {
+  if (task.totalLoggedMinutes === 0 || task.estimatedMinutes === null) {
+    return "text-slate-700";
+  }
+
+  if (task.totalLoggedMinutes > task.estimatedMinutes) return "text-amber-700";
+
+  return task.status === TaskStatus.CLOSED
+    ? "text-emerald-700"
+    : "text-slate-700";
+}
 
 /** RFC 4180 quoting — titles and notes routinely contain commas. */
 function csvCell(value: string | number | null) {
@@ -38,6 +64,7 @@ export function TaskListClient({
   assignableUsers,
   taskTypes,
   canBulkEdit,
+  canEditEstimate,
   currentUserId,
   initial,
 }: {
@@ -45,6 +72,8 @@ export function TaskListClient({
   assignableUsers: { id: string; name: string }[];
   taskTypes: TaskTypeOption[];
   canBulkEdit: boolean;
+  /** The estimate is the yardstick, so only PM/Owner may move it. */
+  canEditEstimate: boolean;
   currentUserId: string;
   initial: {
     assignedToId?: string;
@@ -62,6 +91,10 @@ export function TaskListClient({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState("");
+  const [editingEstimateId, setEditingEstimateId] = useState<string | null>(
+    null,
+  );
+  const [estimateDraft, setEstimateDraft] = useState("");
 
   const [status, setStatus] = useState(initial.status ?? "");
   const [priority, setPriority] = useState("");
@@ -182,6 +215,25 @@ export function TaskListClient({
     router.refresh();
   }
 
+  async function saveEstimate(taskId: string) {
+    const minutes = estimateDraft === "" ? null : Number(estimateDraft);
+
+    const response = await fetch(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ estimatedMinutes: minutes }),
+    });
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      toast(payload?.error ?? "Could not save the estimate.", "error");
+      return;
+    }
+
+    setEditingEstimateId(null);
+    await load();
+  }
+
   function exportCsv() {
     const header = [
       "Task",
@@ -190,6 +242,8 @@ export function TaskListClient({
       "Assigned to",
       "Created by",
       "Due date",
+      "Estimated minutes",
+      "Logged minutes",
       "Priority",
       "Status",
       "Hold release",
@@ -208,6 +262,8 @@ export function TaskListClient({
       task.assignedToName ?? "",
       task.createdByName ?? "",
       task.dueDate ? task.dueDate.slice(0, 10) : "",
+      task.estimatedMinutes ?? "",
+      task.totalLoggedMinutes || "",
       task.priority,
       STATUS_LABELS[task.status],
       task.holdReleaseDate ? task.holdReleaseDate.slice(0, 10) : "",
@@ -492,6 +548,10 @@ export function TaskListClient({
                   <th className="px-4 py-3">
                     <SortHeader label="Due" sortAs="dueDate" />
                   </th>
+                  <th className="px-4 py-3 text-right">
+                    <SortHeader label="Est. Time" sortAs="estimatedMinutes" />
+                  </th>
+                  <th className="px-4 py-3 text-right">Logged</th>
                   <th className="px-4 py-3">
                     <SortHeader label="Priority" sortAs="priority" />
                   </th>
@@ -571,6 +631,75 @@ export function TaskListClient({
                           <span className="text-slate-400">—</span>
                         )}
                       </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        {editingEstimateId === task.id ? (
+                          <span className="flex items-center justify-end gap-1">
+                            <NumericInput
+                              value={estimateDraft}
+                              onChange={setEstimateDraft}
+                              maxLength={4}
+                              autoFocus
+                              aria-label="Estimated minutes"
+                              className="w-20"
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") saveEstimate(task.id);
+                                if (event.key === "Escape") {
+                                  setEditingEstimateId(null);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => saveEstimate(task.id)}
+                              className="text-xs font-medium text-brand-700 hover:text-brand-800"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingEstimateId(null)}
+                              className="text-xs text-slate-500 hover:text-slate-700"
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : canEditEstimate ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingEstimateId(task.id);
+                              setEstimateDraft(
+                                task.estimatedMinutes === null
+                                  ? ""
+                                  : String(task.estimatedMinutes),
+                              );
+                            }}
+                            className="rounded px-1 hover:bg-slate-100"
+                            title="Click to edit"
+                          >
+                            {task.estimatedMinutes === null ? (
+                              <span className="text-slate-400">—</span>
+                            ) : (
+                              formatMinutes(task.estimatedMinutes)
+                            )}
+                          </button>
+                        ) : task.estimatedMinutes === null ? (
+                          <span className="text-slate-400">—</span>
+                        ) : (
+                          formatMinutes(task.estimatedMinutes)
+                        )}
+                      </td>
+
+                      <td
+                        className={`px-4 py-3 text-right tabular-nums ${loggedTone(task)}`}
+                      >
+                        {task.totalLoggedMinutes === 0 ? (
+                          <span className="text-slate-400">—</span>
+                        ) : (
+                          formatMinutes(task.totalLoggedMinutes)
+                        )}
+                      </td>
+
                       <td className="px-4 py-3">
                         <Badge variant={PRIORITY_VARIANT[task.priority]}>
                           {task.priority}
@@ -605,10 +734,11 @@ export function TaskListClient({
 
                     {expandedId === task.id ? (
                       <tr>
-                        <td colSpan={canBulkEdit ? 10 : 9} className="p-0">
+                        <td colSpan={canBulkEdit ? 12 : 11} className="p-0">
                           <TaskEditPanel
                             task={task}
                             currentUserId={currentUserId}
+                            canEditEstimate={canEditEstimate}
                             onSaved={load}
                             onClose={() => setExpandedId(null)}
                           />

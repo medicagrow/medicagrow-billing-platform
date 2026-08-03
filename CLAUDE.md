@@ -18,8 +18,14 @@ other medical billing companies.
 - **Queue scoping:** every "my queue" enforces assigned-to-caller + RED +
   practice membership in one query. Owners skip the practice join since they
   hold no `UserPractice` rows.
-- **Blue status** hands work back to whoever owns the batch — `uploadedById`
-  for AR, `postedById` for EOB.
+- **Blue status escalates through one chain**, resolved by
+  `resolveEscalationTarget()` in [lib/escalation.ts](lib/escalation.ts) and
+  shared by AR and EOB so the two cannot drift: the practice's
+  `primaryPmId` → the batch owner (`uploadedById` for AR, `postedById` for
+  EOB) → the oldest active Owner. A **deactivated** primary PM is skipped —
+  assigning into a queue nobody reads is worse than falling through. If the
+  whole chain resolves to nobody, the claim/entry keeps its current assignee
+  rather than being orphaned.
 - Work-note tables (`ar_work_notes`, `eob_work_notes`, `task_notes`) are
   **add-only**.
 - **Practice pickers read the top bar.** `usePracticeDefault()` returns the
@@ -283,6 +289,34 @@ built to take more modules without touching the routes or pages.
 npx tsx scripts/test-notes.ts      # generated note text for all 8 outcomes
 npx tsx scripts/test-my-queue.ts   # queue scoping (needs the dev server)
 npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
+```
+
+### Time Log & Efficiency
+
+`/productivity/time-logs`, Owner and PM only. The aggregation lives in
+[lib/time-analysis.ts](lib/time-analysis.ts) and is shared by
+`GET /api/time-logs/summary` and `GET /api/time-logs/sessions`, so the totals
+and the rows behind them cannot disagree.
+
+- **Sessions are the unit of time; tasks are the unit of estimate.** Logged
+  minutes come from `task_time_logs`; the estimate is one number on the task.
+  Summing the estimate per session would count it once per session, so
+  estimates are gathered from the distinct tasks the sessions touched.
+- **Efficiency = logged ÷ estimated × 100**, so *lower is better*: under 100%
+  is green, 100–120% amber, above 120% red. A task with **no estimate is
+  excluded from the rate, not counted as zero** — the same principle as a
+  missing tracker measure.
+- **Overrun = logged > estimated**, and only for tasks that have an estimate.
+  Exactly on the estimate is not an overrun. A task is attributed as an
+  overrun to every biller who logged against it.
+- Sessions are selected by **`startedAt`** and must have stopped — a running
+  timer has no duration yet. A past period's numbers therefore never change.
+- Both routes narrow the requested practices against `accessiblePracticeIds()`,
+  so a hand-edited query string cannot widen a PM's scope.
+
+```bash
+npx tsx scripts/test-time-logs.ts   # efficiency rate, overrun detection, breakdowns
+npx tsx scripts/test-escalation.ts  # blue-status fallback chain
 ```
 
 ### Import format — standard CSV only
