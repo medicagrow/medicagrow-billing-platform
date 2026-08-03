@@ -19,7 +19,11 @@ export default async function SettingsPracticesPage() {
     <div className="mx-auto max-w-6xl">
       <PageHeader
         title="Practices"
-        description="Every practice on the platform. AR batches belong to a practice."
+        description={
+          user.role === Role.OWNER
+            ? "Every practice on the platform. AR batches belong to a practice."
+            : "The practices you manage. AR batches belong to a practice."
+        }
       />
       <PracticesManager canEdit={user.role === Role.OWNER} />
     </div>

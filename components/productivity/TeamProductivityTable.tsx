@@ -1,12 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { ProgressBar, progressTextClass } from "@/components/ui/ProgressBar";
 import { downloadCsv } from "@/lib/csv-export";
+import { formatUSD } from "@/lib/format";
 import { roleBadgeVariants, roleLabels } from "@/lib/roles";
+import { formatMinutes } from "@/lib/task-timer-serialize";
 import type { Role } from "@/lib/generated/prisma/enums";
 import type { BillerProductivity } from "@/lib/productivity/types";
 
@@ -22,6 +25,7 @@ export function TeamProductivityTable({
   to: string;
   practiceId?: string;
 }) {
+  const [expanded, setExpanded] = useState<string[]>([]);
   if (team.length === 0) {
     return (
       <EmptyState
@@ -55,6 +59,13 @@ export function TeamProductivityTable({
     return `/productivity/${userId}?${params.toString()}`;
   };
 
+  /** The same person and type, in the time report. */
+  const timeLogHref = (userId: string, taskTypeId: string | null) => {
+    const params = new URLSearchParams({ from, to, userId });
+    if (taskTypeId) params.set("taskTypeId", taskTypeId);
+    return `/productivity/time-logs?${params.toString()}`;
+  };
+
   function handleExport() {
     downloadCsv(
       `team-productivity-${from}-to-${to}.csv`,
@@ -64,6 +75,7 @@ export function TeamProductivityTable({
         "Practices",
         ...activityColumns.map((column) => column.label),
         "Total Activity",
+        "Time Logged (minutes)",
         "Completion %",
       ],
       team.map((entry) => [
@@ -72,6 +84,7 @@ export function TeamProductivityTable({
         entry.assignedPractices.join("; "),
         ...activityColumns.map((column) => countOf(entry, column.key)),
         totalFor(entry),
+        entry.totalLoggedMinutes,
         completionOf(entry),
       ]),
     );
@@ -108,6 +121,7 @@ export function TeamProductivityTable({
                 </th>
               ))}
               <th className="px-4 py-3 text-right">Total</th>
+              <th className="px-4 py-3 text-right">Time Logged</th>
               <th className="px-4 py-3">Completion</th>
             </tr>
           </thead>
@@ -115,16 +129,42 @@ export function TeamProductivityTable({
             {team.map((entry) => {
               const total = totalFor(entry);
               const completion = completionOf(entry);
+              const isOpen = expanded.includes(entry.userId);
 
-              return (
+              return [
                 <tr key={entry.userId} className="hover:bg-slate-50">
                   <td className="px-4 py-3">
-                    <Link
-                      href={detailHref(entry.userId)}
-                      className="font-medium text-slate-900 hover:text-brand-700"
-                    >
-                      {entry.userName}
-                    </Link>
+                    <div className="flex items-center gap-1.5">
+                      {/*
+                        The name opens the breakdown in place; the arrow beside
+                        it goes to the person's own page. Two destinations, so
+                        each gets its own control.
+                      */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpanded((current) =>
+                            current.includes(entry.userId)
+                              ? current.filter((id) => id !== entry.userId)
+                              : [...current, entry.userId],
+                          )
+                        }
+                        aria-expanded={isOpen}
+                        className="flex items-center gap-1.5 font-medium text-slate-900 hover:text-brand-700"
+                      >
+                        <span className="text-slate-400">
+                          {isOpen ? "▾" : "▸"}
+                        </span>
+                        {entry.userName}
+                      </button>
+                      <Link
+                        href={detailHref(entry.userId)}
+                        className="text-xs text-brand-700 hover:underline"
+                        aria-label={`Open ${entry.userName}'s productivity detail`}
+                      >
+                        →
+                      </Link>
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <Badge
@@ -162,6 +202,18 @@ export function TeamProductivityTable({
                   <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
                     {total}
                   </td>
+                  <td className="px-4 py-3 text-right tabular-nums">
+                    {entry.totalLoggedMinutes === 0 ? (
+                      <span className="text-slate-300">—</span>
+                    ) : (
+                      <Link
+                        href={timeLogHref(entry.userId, null)}
+                        className="font-medium text-brand-700 hover:underline"
+                      >
+                        {formatMinutes(entry.totalLoggedMinutes)}
+                      </Link>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <ProgressBar percent={completion} className="w-20" />
@@ -172,8 +224,83 @@ export function TeamProductivityTable({
                       </span>
                     </div>
                   </td>
-                </tr>
-              );
+                </tr>,
+
+                isOpen ? (
+                  <tr key={`${entry.userId}-types`} className="bg-slate-50/70">
+                    <td colSpan={activityColumns.length + 6} className="px-4 py-3">
+                      {entry.taskTypeBreakdown.length === 0 ? (
+                        <p className="text-xs text-slate-500">
+                          No tasks closed in this period.
+                        </p>
+                      ) : (
+                        <table className="w-full text-xs">
+                          <thead className="text-left uppercase tracking-wide text-slate-400">
+                            <tr>
+                              <th className="py-1 pr-4 font-medium">Task type</th>
+                              <th className="py-1 pr-4 text-right font-medium">
+                                Count
+                              </th>
+                              <th className="py-1 pr-4 text-right font-medium">
+                                Amount
+                              </th>
+                              <th className="py-1 pr-4 text-right font-medium">
+                                Time logged
+                              </th>
+                              <th className="py-1 font-medium">Link</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {entry.taskTypeBreakdown.map((type) => (
+                              <tr key={type.taskTypeId ?? "none"}>
+                                <td className="py-1 pr-4 text-slate-700">
+                                  {type.taskTypeName}
+                                  <span className="ml-1.5 text-slate-400">
+                                    ({type.taskCount} task
+                                    {type.taskCount === 1 ? "" : "s"})
+                                  </span>
+                                </td>
+                                <td className="py-1 pr-4 text-right tabular-nums text-slate-700">
+                                  {type.count === 0 ? (
+                                    <span className="text-slate-300">—</span>
+                                  ) : (
+                                    type.count
+                                  )}
+                                </td>
+                                <td className="py-1 pr-4 text-right tabular-nums text-slate-700">
+                                  {type.totalAmount === null ? (
+                                    <span className="text-slate-300">—</span>
+                                  ) : (
+                                    formatUSD(type.totalAmount)
+                                  )}
+                                </td>
+                                <td className="py-1 pr-4 text-right tabular-nums text-slate-700">
+                                  {type.loggedMinutes === 0 ? (
+                                    <span className="text-slate-300">—</span>
+                                  ) : (
+                                    formatMinutes(type.loggedMinutes)
+                                  )}
+                                </td>
+                                <td className="py-1">
+                                  <Link
+                                    href={timeLogHref(
+                                      entry.userId,
+                                      type.taskTypeId,
+                                    )}
+                                    className="text-brand-700 hover:underline"
+                                  >
+                                    → Time Logs
+                                  </Link>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </td>
+                  </tr>
+                ) : null,
+              ];
             })}
           </tbody>
         </table>

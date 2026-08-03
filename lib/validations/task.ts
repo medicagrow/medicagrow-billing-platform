@@ -83,14 +83,12 @@ export const updateTaskSchema = z
       .max(1440)
       .nullable()
       .optional(),
-    /** Recorded when the task is closed, so estimates can be checked. */
-    actualMinutes: z.coerce
-      .number()
-      .int()
-      .min(0)
-      .max(10080)
-      .nullable()
-      .optional(),
+    /**
+     * `actualMinutes` is deliberately absent: it is derived from the timer
+     * logs when the task closes, never sent by the client. A number typed into
+     * a box is a guess, and it was being compared against the estimate as if
+     * it were measured.
+     */
     priority: z.enum(TodoPriority).optional(),
     status: z.enum(TaskStatus).optional(),
     holdReleaseDate: dateStringSchema.nullable().optional(),

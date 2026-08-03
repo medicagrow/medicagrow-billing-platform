@@ -15,6 +15,7 @@ import {
 } from "@/lib/generated/prisma/enums";
 import { centsToDecimalString, toCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { generateDueInstances } from "@/lib/task/recurrence";
 import { dayEnd, dayStart } from "@/lib/todo/access";
 import { checkHoldReleases } from "@/lib/todo/hold-release";
 
@@ -82,8 +83,9 @@ export default async function DashboardPage({
       : { practiceId: { in: practiceIds } };
 
   // The dashboard is often the first page of the day, so held work that is
-  // due back must be released before any of these counts are taken.
-  await checkHoldReleases(user.id);
+  // due back must be released — and any recurring occurrence that came due
+  // must be created — before any of these counts are taken.
+  await Promise.all([checkHoldReleases(user.id), generateDueInstances()]);
 
   const today = dayStart();
   const monthStart = new Date(

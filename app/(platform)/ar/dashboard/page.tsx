@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/ui/Card";
 import { accessiblePracticeIds, canManageBatches } from "@/lib/ar-access";
 import { InsuranceAgingTable } from "@/components/ar/InsuranceAgingTable";
 import { ProgressBar, progressTextClass } from "@/components/ui/ProgressBar";
-import { arSummary, billerProgress } from "@/lib/ar-summary";
+import { arBillerActivity, arSummary, billerProgress } from "@/lib/ar-summary";
 import { toDateParam } from "@/lib/productivity/date-ranges";
 import { insuranceAgingBreakdown } from "@/lib/ar-insurance-aging";
 import { AGING_BUCKETS } from "@/lib/ar-aging";
@@ -193,52 +193,15 @@ export default async function ArDashboardPage({
     { balance: 0, red: 0, overdue: 0, noBatch: 0 },
   );
 
-  // Biller productivity from the work-note audit trail.
-  const startOfWeek = new Date(today);
-  startOfWeek.setUTCDate(startOfWeek.getUTCDate() - 6);
   const startOfMonth = new Date(
     Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
   );
 
-  const [todayNotes, weekNotes, monthNotes, users] = await Promise.all([
-    prisma.arWorkNote.groupBy({
-      by: ["workedById"],
-      where: { workedAt: { gte: today } },
-      _count: { _all: true },
-    }),
-    prisma.arWorkNote.groupBy({
-      by: ["workedById"],
-      where: { workedAt: { gte: startOfWeek } },
-      _count: { _all: true },
-    }),
-    prisma.arWorkNote.groupBy({
-      by: ["workedById"],
-      where: { workedAt: { gte: startOfMonth } },
-      _count: { _all: true },
-    }),
-    prisma.user.findMany({
-      where: {
-        isActive: true,
-        role: { in: [Role.BILLER, Role.PROJECT_MANAGER] },
-      },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, role: true },
-    }),
-  ]);
-
-  const noteCount = (
-    groups: { workedById: string; _count: { _all: number } }[],
-    userId: string,
-  ) => groups.find((row) => row.workedById === userId)?._count._all ?? 0;
-
-  const productivity = users
-    .map((entry) => ({
-      ...entry,
-      today: noteCount(todayNotes, entry.id),
-      thisWeek: noteCount(weekNotes, entry.id),
-      thisMonth: noteCount(monthNotes, entry.id),
-    }))
-    .sort((a, b) => b.thisMonth - a.thisMonth);
+  // Same helper the API route uses, so the page and /api/ar/dashboard cannot
+  // disagree — and both are scoped to the practices this user manages.
+  const productivity = (
+    await arBillerActivity({ practiceIds, selectedPracticeId })
+  ).sort((a, b) => b.thisMonth - a.thisMonth);
 
   const productivityFrom = toDateParam(startOfMonth);
   const productivityTo = toDateParam(today);

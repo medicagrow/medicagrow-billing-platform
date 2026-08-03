@@ -32,6 +32,7 @@ export default async function MyTasksPage() {
         assignableUsers={assignableUsers}
         taskTypes={taskTypes}
         canEditEstimate={user.role !== Role.BILLER}
+        canCloseWithoutTimer={user.role !== Role.BILLER}
         currentUserId={user.id}
       />
     </div>

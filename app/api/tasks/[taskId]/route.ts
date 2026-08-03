@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { canAssignTask, canEditTask } from "@/lib/task-access";
 import { TASK_DETAIL_INCLUDE, toTaskDto } from "@/lib/task-serialize";
+import { formatMinutes } from "@/lib/task-timer-serialize";
 import { closeSeries, createNextInstance } from "@/lib/task/recurrence";
 import { dayStart } from "@/lib/todo/access";
 import { updateTaskSchema } from "@/lib/validations/task";
@@ -72,6 +73,7 @@ export async function PATCH(
       holdReleaseDate: true,
       isRecurring: true,
       parentTaskId: true,
+      totalLoggedMinutes: true,
     },
   });
 
@@ -98,6 +100,25 @@ export async function PATCH(
     );
   }
 
+  const closing =
+    input.status === TaskStatus.CLOSED && existing.status !== TaskStatus.CLOSED;
+
+  /**
+   * A biller cannot close work they never timed.
+   *
+   * Efficiency is measured against logged time, so a task closed with an empty
+   * timer is a hole in the record. PMs and Owners are exempt: they close tasks
+   * they manage but did not personally work, and blocking that would leave the
+   * task open instead of getting the time logged.
+   */
+  if (
+    closing &&
+    session!.user.role === Role.BILLER &&
+    existing.totalLoggedMinutes === 0
+  ) {
+    return apiErrorResponse("Timer entry required before closing", 400);
+  }
+
   const data: Record<string, unknown> = {};
   if (input.title !== undefined) data.title = input.title;
   if (input.description !== undefined) {
@@ -105,7 +126,6 @@ export async function PATCH(
   }
   if (input.practiceId !== undefined) data.practiceId = input.practiceId ?? null;
   if (input.taskTypeId !== undefined) data.taskTypeId = input.taskTypeId ?? null;
-  if (input.actualMinutes !== undefined) data.actualMinutes = input.actualMinutes;
   if (input.isRecurring !== undefined) data.isRecurring = input.isRecurring;
   if (input.recurringConfig !== undefined) {
     data.recurringConfig = input.recurringConfig ?? undefined;
@@ -150,6 +170,8 @@ export async function PATCH(
       if (existing.status !== TaskStatus.CLOSED) {
         data.completedAt = new Date();
         data.completedById = session!.user.id;
+        // Time taken is what the timer recorded, not what anyone remembers.
+        data.actualMinutes = existing.totalLoggedMinutes;
       }
     } else {
       // Re-opening clears the completion so productivity counts stay honest.
@@ -188,15 +210,14 @@ export async function PATCH(
 
   // Time actually spent is worth its own line in the log — that is where
   // anyone comparing it against the estimate will look.
-  if (
-    input.actualMinutes !== undefined &&
-    input.actualMinutes !== null &&
-    input.status === TaskStatus.CLOSED
-  ) {
+  if (closing) {
     await prisma.taskNote.create({
       data: {
         taskId: task.id,
-        note: `Completed in ${input.actualMinutes} minutes`,
+        note:
+          existing.totalLoggedMinutes > 0
+            ? `Completed in ${formatMinutes(existing.totalLoggedMinutes)} (from timer logs)`
+            : "Completed with no time logged",
         addedById: session!.user.id,
       },
     });

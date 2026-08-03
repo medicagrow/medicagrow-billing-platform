@@ -135,23 +135,43 @@ export function TimeLogsClient({
   billers,
   practices,
   taskTypes,
+  initialUserIds = [],
+  initialPracticeIds = [],
+  initialTaskTypeIds = [],
+  initialFrom,
+  initialTo,
 }: {
   billers: Option[];
   practices: Option[];
   taskTypes: Option[];
+  /**
+   * Seeded from the URL when someone arrives from the productivity table,
+   * which links to one person's time on one type of task.
+   */
+  initialUserIds?: string[];
+  initialPracticeIds?: string[];
+  initialTaskTypeIds?: string[];
+  initialFrom?: string;
+  initialTo?: string;
 }) {
   const { selectedPracticeId } = usePractice();
 
-  const [preset, setPreset] = useState<Preset>("this_week");
-  const initial = resolvePreset("this_week");
-  const [customFrom, setCustomFrom] = useState(toDateParam(initial.from));
-  const [customTo, setCustomTo] = useState(toDateParam(initial.to));
-  const [appliedFrom, setAppliedFrom] = useState(toDateParam(initial.from));
-  const [appliedTo, setAppliedTo] = useState(toDateParam(initial.to));
+  // A window supplied in the link is a custom range; otherwise, this week.
+  const linked = Boolean(initialFrom && initialTo);
+  const fallback = resolvePreset("this_week");
 
-  const [userIds, setUserIds] = useState<string[]>([]);
-  const [practiceIds, setPracticeIds] = useState<string[]>([]);
-  const [taskTypeIds, setTaskTypeIds] = useState<string[]>([]);
+  const startFrom = initialFrom ?? toDateParam(fallback.from);
+  const startTo = initialTo ?? toDateParam(fallback.to);
+
+  const [preset, setPreset] = useState<Preset>(linked ? "custom" : "this_week");
+  const [customFrom, setCustomFrom] = useState(startFrom);
+  const [customTo, setCustomTo] = useState(startTo);
+  const [appliedFrom, setAppliedFrom] = useState(startFrom);
+  const [appliedTo, setAppliedTo] = useState(startTo);
+
+  const [userIds, setUserIds] = useState<string[]>(initialUserIds);
+  const [practiceIds, setPracticeIds] = useState<string[]>(initialPracticeIds);
+  const [taskTypeIds, setTaskTypeIds] = useState<string[]>(initialTaskTypeIds);
 
   const [tab, setTab] = useState<Tab>("biller");
   const [expandedBillers, setExpandedBillers] = useState<string[]>([]);

@@ -6,18 +6,29 @@ import {
   requireRole,
   zodErrorResponse,
 } from "@/lib/api-helpers";
+import { accessiblePracticeIds } from "@/lib/ar-access";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { practiceSchema } from "@/lib/validations/settings";
 
-/** GET /api/settings/practices — every practice, for pickers and admin lists. */
+/**
+ * GET /api/settings/practices — practices for pickers and admin lists.
+ *
+ * Scoped to what the caller may see: an Owner gets every practice, everyone
+ * else gets the ones they are assigned to. A PM administering a practice they
+ * do not manage is not a thing this platform allows, so it should not be in
+ * their list to begin with.
+ */
 export async function GET() {
   const session = await getSession();
 
   const denied = requireAuth(session);
   if (denied) return denied;
 
+  const practiceIds = await accessiblePracticeIds(session!.user);
+
   const practices = await prisma.practice.findMany({
+    where: practiceIds === null ? {} : { id: { in: practiceIds } },
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
     select: {
       id: true,

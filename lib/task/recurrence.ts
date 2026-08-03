@@ -1,6 +1,7 @@
 import type { Task } from "@/lib/generated/prisma/client";
 import { TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import { dayStart } from "@/lib/todo/access";
 import {
   nextOccurrence,
   parseRecurringConfig,
@@ -23,7 +24,28 @@ export * from "@/lib/task/recurrence-config";
  * `recurringConfig.nextDueDate` on the parent is the high-water mark: the
  * first occurrence not yet generated. Every generator advances it, so two
  * concurrent calls cannot both claim the same date.
+ *
+ * **An occurrence is only created once it is due.** Only the very first one is
+ * written up front, so the series is real the moment it is set up; every later
+ * occurrence appears on its own due date. A queue full of tasks dated next
+ * week is noise, and closing one early would record work against a day that
+ * has not happened.
+ *
+ * There is no scheduler in this deployment, so `generateDueInstances()` runs
+ * from the places people actually load — `GET /api/tasks`,
+ * `GET /api/tasks/my-tasks` and the dashboard — exactly as
+ * `checkHoldReleases()` does.
  */
+
+/**
+ * How many missed occurrences one sweep will create for a single series.
+ *
+ * A week of catch-up is a long weekend or a holiday, and that work is real. A
+ * series dormant for longer than that has gone stale: dropping a month of
+ * backdated daily tasks into someone's queue helps nobody, so the mark is
+ * fast-forwarded to the current occurrence instead.
+ */
+const MAX_CATCH_UP = 7;
 
 /** Fields a child instance inherits from its parent. */
 function instanceDataFrom(parent: Task, dueDate: Date, instanceNumber: number) {
@@ -56,91 +78,158 @@ async function lastInstanceNumber(parentTaskId: string): Promise<number> {
   return latest?.instanceNumber ?? 0;
 }
 
-/**
- * Creates the next occurrence of a recurring series and advances the parent's
- * `nextDueDate`. Returns null when the series has ended, has no config, or
- * that date is already scheduled.
- */
-export async function createNextInstance(parent: Task): Promise<Task | null> {
-  const config = parseRecurringConfig(parent.recurringConfig);
-  if (!config || !parent.isRecurring) return null;
+/** Writes the parent's new high-water mark, or leaves it where the series ended. */
+async function advanceMark(
+  parentId: string,
+  config: RecurringConfig,
+  nextDueDate: string | null,
+) {
+  await prisma.task.update({
+    where: { id: parentId },
+    data: {
+      recurringConfig: (nextDueDate
+        ? { ...config, nextDueDate }
+        : { ...config }) as object,
+    },
+  });
+}
 
-  const dueDate = toUtcDate(config.nextDueDate);
-
-  if (config.endDate && config.nextDueDate > config.endDate) return null;
-
+/** Creates one occurrence unless that date is already scheduled. */
+async function writeInstance(parent: Task, dueDate: Date): Promise<Task | null> {
   // Generating twice for one date would double the work rather than repeat it.
   const clash = await prisma.task.findFirst({
     where: { parentTaskId: parent.id, dueDate },
     select: { id: true },
   });
 
-  const created = clash
-    ? null
-    : await prisma.task.create({
-        data: instanceDataFrom(
-          parent,
-          dueDate,
-          (await lastInstanceNumber(parent.id)) + 1,
-        ),
-      });
+  if (clash) return null;
 
-  // Advance the high-water mark whether or not a row was written, so a clash
-  // cannot wedge the series on one date forever.
-  const following = nextOccurrence(config, dueDate);
-
-  await prisma.task.update({
-    where: { id: parent.id },
-    data: {
-      recurringConfig: following
-        ? ({ ...config, nextDueDate: toIsoDate(following) } as object)
-        : ({ ...config } as object),
-    },
+  return prisma.task.create({
+    data: instanceDataFrom(
+      parent,
+      dueDate,
+      (await lastInstanceNumber(parent.id)) + 1,
+    ),
   });
+}
+
+/**
+ * Creates the occurrence the parent's mark points at, but **only once it is
+ * due**, and advances the mark past it.
+ *
+ * Called when an instance is closed. If the next occurrence is still in the
+ * future the mark is left alone and nothing is written — `generateDueInstances()`
+ * picks it up on the day itself. Returns null in that case, as it does when the
+ * series has ended or the date is already scheduled.
+ */
+export async function createNextInstance(parent: Task): Promise<Task | null> {
+  const config = parseRecurringConfig(parent.recurringConfig);
+  if (!config || !parent.isRecurring) return null;
+
+  if (config.endDate && config.nextDueDate > config.endDate) return null;
+
+  // Not due yet: the mark already names it, so there is nothing to do.
+  if (config.nextDueDate > toIsoDate(dayStart())) return null;
+
+  const dueDate = toUtcDate(config.nextDueDate);
+  const created = await writeInstance(parent, dueDate);
+
+  // Advance whether or not a row was written, so a clash cannot wedge the
+  // series on one date forever.
+  const following = nextOccurrence(config, dueDate);
+  await advanceMark(parent.id, config, following ? toIsoDate(following) : null);
 
   return created;
 }
 
 /**
- * Creates the first `count` occurrences when a recurring task is set up, so
- * the series is visible in planning views right away rather than appearing
- * one at a time as each is completed.
+ * Creates the first occurrence when a recurring task is set up.
+ *
+ * Exactly one, even when the start date is in the future — the series has to
+ * exist as something you can see and open, but the occurrences after it wait
+ * for their own due dates.
  */
-export async function generateInitialInstances(
-  parent: Task,
-  count = 3,
-): Promise<Task[]> {
+export async function generateFirstInstance(parent: Task): Promise<Task | null> {
   const config = parseRecurringConfig(parent.recurringConfig);
-  if (!config || !parent.isRecurring) return [];
+  if (!config || !parent.isRecurring) return null;
 
-  const dates = upcomingOccurrences(config, count);
-  if (dates.length === 0) return [];
+  const [first] = upcomingOccurrences(config, 1);
+  if (!first) return null;
 
-  const startingAt = await lastInstanceNumber(parent.id);
+  const created = await writeInstance(parent, first);
 
-  const created = await Promise.all(
-    dates.map((dueDate, index) =>
-      prisma.task.create({
-        data: instanceDataFrom(parent, dueDate, startingAt + index + 1),
-      }),
-    ),
-  );
+  const following = nextOccurrence(config, first);
+  await advanceMark(parent.id, config, following ? toIsoDate(following) : null);
 
-  // The next occurrence after the last one generated becomes the new mark.
-  const last = dates[dates.length - 1]!;
-  const following = nextOccurrence(config, last);
+  return created;
+}
 
-  await prisma.task.update({
-    where: { id: parent.id },
-    data: {
-      recurringConfig: {
-        ...config,
-        ...(following ? { nextDueDate: toIsoDate(following) } : {}),
-      } as object,
+export interface DueInstanceResult {
+  /** Occurrences written. */
+  created: number;
+  /** Series that produced at least one. */
+  series: number;
+}
+
+/**
+ * Creates every occurrence that has come due, for every live series.
+ *
+ * This is the scheduler: there is no cron in this deployment, so it runs from
+ * the routes people load. It is cheap when there is nothing to do — recurring
+ * parents are templates, so there are few of them, and a series whose mark is
+ * still in the future is skipped without a write.
+ */
+export async function generateDueInstances(options?: {
+  /** Narrows the sweep to one person's series. */
+  assignedToId?: string;
+}): Promise<DueInstanceResult> {
+  const today = toIsoDate(dayStart());
+
+  const parents = await prisma.task.findMany({
+    where: {
+      isRecurring: true,
+      status: { not: TaskStatus.CLOSED },
+      ...(options?.assignedToId ? { assignedToId: options.assignedToId } : {}),
     },
   });
 
-  return created;
+  let created = 0;
+  let series = 0;
+
+  for (const parent of parents) {
+    const config = parseRecurringConfig(parent.recurringConfig);
+    if (!config || config.nextDueDate > today) continue;
+
+    // Walk the schedule in memory first: one pass, no reload between dates.
+    const due: string[] = [];
+    let cursor: string | null = config.nextDueDate;
+
+    while (cursor && cursor <= today && due.length < 400) {
+      due.push(cursor);
+      const following = nextOccurrence(config, toUtcDate(cursor));
+      cursor = following ? toIsoDate(following) : null;
+    }
+
+    if (due.length === 0) continue;
+
+    // Past the cap, the skipped dates are abandoned rather than backfilled.
+    const toCreate = due.slice(-MAX_CATCH_UP);
+    let wrote = false;
+
+    for (const date of toCreate) {
+      const instance = await writeInstance(parent, toUtcDate(date));
+      if (instance) {
+        created += 1;
+        wrote = true;
+      }
+    }
+
+    if (wrote) series += 1;
+
+    await advanceMark(parent.id, config, cursor);
+  }
+
+  return { created, series };
 }
 
 /**

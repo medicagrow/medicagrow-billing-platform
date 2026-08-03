@@ -7,7 +7,7 @@ import {
 import { requireRole } from "@/lib/api-helpers";
 import { accessiblePracticeIds } from "@/lib/ar-access";
 import { insuranceAgingBreakdown } from "@/lib/ar-insurance-aging";
-import { arSummary, billerProgress } from "@/lib/ar-summary";
+import { arBillerActivity, arSummary, billerProgress } from "@/lib/ar-summary";
 import { AGING_BUCKETS } from "@/lib/ar-aging";
 import { daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
 import { prisma } from "@/lib/prisma";
@@ -155,45 +155,14 @@ export async function GET(request: NextRequest) {
     };
   });
 
-  // Biller productivity — counted from the work-note audit trail.
-  const startOfWeek = new Date(today);
-  startOfWeek.setUTCDate(startOfWeek.getUTCDate() - 6);
-  const startOfMonth = new Date(
-    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
-  );
-
-  const [todayNotes, weekNotes, monthNotes, users] = await Promise.all([
-    prisma.arWorkNote.groupBy({
-      by: ["workedById"],
-      where: { workedAt: { gte: today } },
-      _count: { _all: true },
-    }),
-    prisma.arWorkNote.groupBy({
-      by: ["workedById"],
-      where: { workedAt: { gte: startOfWeek } },
-      _count: { _all: true },
-    }),
-    prisma.arWorkNote.groupBy({
-      by: ["workedById"],
-      where: { workedAt: { gte: startOfMonth } },
-      _count: { _all: true },
-    }),
-    prisma.user.findMany({
-      where: { isActive: true, role: { in: [Role.BILLER, Role.PROJECT_MANAGER] } },
-      select: { id: true, name: true, role: true },
-      orderBy: { name: "asc" },
-    }),
-  ]);
-
-  const noteCount = (
-    groups: { workedById: string; _count: { _all: number } }[],
-    userId: string,
-  ) => groups.find((row) => row.workedById === userId)?._count._all ?? 0;
+  // Biller productivity — counted from the work-note audit trail, scoped to
+  // the practices in view so a PM never sees another practice's work.
+  const activity = await arBillerActivity({ practiceIds, selectedPracticeId });
 
   const buildProductivity = (
     progress: Awaited<ReturnType<typeof billerProgress>>,
   ) =>
-    users
+    activity
       .map((user) => {
         const claims = progress.get(user.id);
 
@@ -201,9 +170,9 @@ export async function GET(request: NextRequest) {
           userId: user.id,
           name: user.name,
           role: user.role,
-          today: noteCount(todayNotes, user.id),
-          thisWeek: noteCount(weekNotes, user.id),
-          thisMonth: noteCount(monthNotes, user.id),
+          today: user.today,
+          thisWeek: user.thisWeek,
+          thisMonth: user.thisMonth,
           assignedClaims: claims?.assignedClaims ?? 0,
           completedClaims: claims?.completedClaims ?? 0,
           percentComplete: claims?.percentComplete ?? 0,

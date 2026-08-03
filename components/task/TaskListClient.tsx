@@ -65,6 +65,7 @@ export function TaskListClient({
   taskTypes,
   canBulkEdit,
   canEditEstimate,
+  canCloseWithoutTimer,
   currentUserId,
   initial,
 }: {
@@ -74,6 +75,7 @@ export function TaskListClient({
   canBulkEdit: boolean;
   /** The estimate is the yardstick, so only PM/Owner may move it. */
   canEditEstimate: boolean;
+  canCloseWithoutTimer: boolean;
   currentUserId: string;
   initial: {
     assignedToId?: string;
@@ -739,6 +741,7 @@ export function TaskListClient({
                             task={task}
                             currentUserId={currentUserId}
                             canEditEstimate={canEditEstimate}
+                            canCloseWithoutTimer={canCloseWithoutTimer}
                             onSaved={load}
                             onClose={() => setExpandedId(null)}
                           />

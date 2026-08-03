@@ -7,7 +7,14 @@ import type { StatusLabel } from "@/lib/ar-status";
  * re-validates against it — a client cannot set an unrelated status.
  */
 export const STATUSES_BY_OUTCOME: Record<OutcomeType, StatusLabel[]> = {
-  [OutcomeType.PAID]: ["Recently Paid", "Paid & Posted", "Paid but not Posted"],
+  // "Confirm if Cashed" is RED on purpose: the payer says it paid, but until
+  // the cheque is confirmed cashed the claim is still work.
+  [OutcomeType.PAID]: [
+    "Recently Paid",
+    "Paid & Posted",
+    "Paid but not Posted",
+    "Confirm if Cashed",
+  ],
   [OutcomeType.DENIED]: [
     "Need to Appeal",
     "Appeal Submitted",

@@ -1,4 +1,4 @@
-import { BatchStatus, StatusCategory } from "@/lib/generated/prisma/enums";
+import { BatchStatus, Role, StatusCategory } from "@/lib/generated/prisma/enums";
 import { daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
 import { centsToDecimalString, toCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -125,6 +125,87 @@ export async function arSummary({
         : Math.round((totalGreenClaims / totalClaims) * 100),
     practices,
   };
+}
+
+/**
+ * The biller productivity panel: who is in scope, and how many notes each of
+ * them logged today, this week and this month.
+ *
+ * Both halves are scoped to the practices in view. A PM oversees practices,
+ * not people, so a biller shared with another practice appears here only for
+ * the work they did on the PM's own — and a biller they share nothing with
+ * does not appear at all.
+ */
+export interface ArBillerActivity {
+  id: string;
+  name: string;
+  role: Role;
+  today: number;
+  thisWeek: number;
+  thisMonth: number;
+}
+
+export async function arBillerActivity({
+  practiceIds,
+  selectedPracticeId,
+}: {
+  /** null means "every practice" (Owner). */
+  practiceIds: string[] | null;
+  selectedPracticeId?: string;
+}): Promise<ArBillerActivity[]> {
+  const today = startOfTodayUtc();
+
+  const startOfWeek = new Date(today);
+  startOfWeek.setUTCDate(startOfWeek.getUTCDate() - 6);
+
+  const startOfMonth = new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
+  );
+
+  const scoped = selectedPracticeId ? [selectedPracticeId] : practiceIds;
+
+  const noteScope =
+    scoped === null
+      ? {}
+      : { claim: { batch: { practiceId: { in: scoped } } } };
+
+  const countsSince = (since: Date) =>
+    prisma.arWorkNote.groupBy({
+      by: ["workedById"],
+      where: { workedAt: { gte: since }, ...noteScope },
+      _count: { _all: true },
+    });
+
+  const [todayNotes, weekNotes, monthNotes, users] = await Promise.all([
+    countsSince(today),
+    countsSince(startOfWeek),
+    countsSince(startOfMonth),
+    prisma.user.findMany({
+      where: {
+        isActive: true,
+        role: { in: [Role.BILLER, Role.PROJECT_MANAGER] },
+        ...(practiceIds === null
+          ? {}
+          : { practices: { some: { practiceId: { in: practiceIds } } } }),
+      },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, role: true },
+    }),
+  ]);
+
+  const noteCount = (
+    groups: { workedById: string; _count: { _all: number } }[],
+    userId: string,
+  ) => groups.find((row) => row.workedById === userId)?._count._all ?? 0;
+
+  return users.map((user) => ({
+    id: user.id,
+    name: user.name,
+    role: user.role,
+    today: noteCount(todayNotes, user.id),
+    thisWeek: noteCount(weekNotes, user.id),
+    thisMonth: noteCount(monthNotes, user.id),
+  }));
 }
 
 /**

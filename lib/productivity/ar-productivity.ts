@@ -12,6 +12,7 @@ import {
   buildDrillDownUrl,
   type ActivityDetailPage,
   type ActivitySummary,
+  practiceFilterFor,
   type ProductivityQuery,
 } from "@/lib/productivity/types";
 
@@ -28,13 +29,15 @@ export {
   type ArActivityKey,
 } from "@/lib/productivity/ar-activities";
 
-/** Shared note filter: this user, this window, optionally one practice. */
-function noteWhere({ userId, from, to, practiceId }: ProductivityQuery) {
+/** Shared note filter: this user, this window, and whichever practices apply. */
+function noteWhere(query: ProductivityQuery) {
+  const practices = practiceFilterFor(query);
+
   return {
-    workedById: userId,
-    workedAt: { gte: from, lte: to },
-    ...(practiceId
-      ? { claim: { batch: { practiceId } } }
+    workedById: query.userId,
+    workedAt: { gte: query.from, lte: query.to },
+    ...(Object.keys(practices).length > 0
+      ? { claim: { batch: practices } }
       : {}),
   };
 }

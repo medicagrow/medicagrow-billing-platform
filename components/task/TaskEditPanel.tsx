@@ -32,6 +32,7 @@ export function TaskEditPanel({
   task,
   currentUserId,
   canEditEstimate = false,
+  canCloseWithoutTimer = false,
   onSaved,
   onClose,
 }: {
@@ -39,6 +40,11 @@ export function TaskEditPanel({
   currentUserId: string;
   /** The estimate is the yardstick, so only PM/Owner may move it. */
   canEditEstimate?: boolean;
+  /**
+   * PMs and Owners close tasks they manage but did not personally work, so
+   * the timer requirement does not apply to them.
+   */
+  canCloseWithoutTimer?: boolean;
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -52,9 +58,6 @@ export function TaskEditPanel({
   const [statusNote, setStatusNote] = useState("");
   const [estimatedMinutes, setEstimatedMinutes] = useState(
     task.estimatedMinutes === null ? "" : String(task.estimatedMinutes),
-  );
-  const [actualMinutes, setActualMinutes] = useState(
-    task.actualMinutes === null ? "" : String(task.actualMinutes),
   );
   const [tab, setTab] = useState<"detail" | "history">("detail");
 
@@ -93,6 +96,18 @@ export function TaskEditPanel({
       return;
     }
 
+    // The route enforces this too; catching it here saves a round trip and
+    // keeps the message next to the control that caused it.
+    if (
+      status === TaskStatus.CLOSED &&
+      task.status !== TaskStatus.CLOSED &&
+      task.totalLoggedMinutes === 0 &&
+      !canCloseWithoutTimer
+    ) {
+      setError("You must log time with the timer before closing this task");
+      return;
+    }
+
     setBusy(true);
 
     try {
@@ -110,11 +125,6 @@ export function TaskEditPanel({
                 estimatedMinutes:
                   estimatedMinutes === "" ? null : Number(estimatedMinutes),
               }
-            : {}),
-          // Only meaningful on close; sending it otherwise would record time
-          // against work still in flight.
-          ...(status === TaskStatus.CLOSED && actualMinutes !== ""
-            ? { actualMinutes: Number(actualMinutes) }
             : {}),
           // Auto-sourced counts come from the module's own audit trail, so the
           // panel never posts one.
@@ -343,21 +353,28 @@ export function TaskEditPanel({
             </p>
           ) : null}
 
+          {/*
+            Time taken is read from the timer, never typed. A remembered figure
+            was being compared against the estimate as though it were measured.
+          */}
           {status === TaskStatus.CLOSED ? (
             <div className="space-y-1.5">
-              <Label htmlFor={`task-${task.id}-actual`}>
-                Actual time taken (minutes)
-              </Label>
-              <NumericInput
-                id={`task-${task.id}-actual`}
-                maxLength={5}
-                value={actualMinutes}
-                onChange={setActualMinutes}
-                placeholder="—"
-              />
+              <p className="text-sm font-medium text-slate-700">Actual time</p>
+              {task.totalLoggedMinutes > 0 ? (
+                <p className="text-sm text-slate-700">
+                  <span className="font-medium text-slate-900">
+                    {formatMinutes(task.totalLoggedMinutes)}
+                  </span>{" "}
+                  <span className="text-slate-500">(from timer logs)</span>
+                </p>
+              ) : (
+                <p className="text-sm font-medium text-amber-700">
+                  No time logged
+                </p>
+              )}
               {task.estimatedMinutes ? (
                 <p className="text-xs text-slate-500">
-                  Estimated {task.estimatedMinutes} minutes.
+                  Estimated {formatMinutes(task.estimatedMinutes)}.
                 </p>
               ) : null}
             </div>

@@ -120,6 +120,16 @@ other and must not be merged.
 - Task visibility ([lib/task-access.ts](lib/task-access.ts)): Billers see
   assigned-to-them plus created-by-them-and-visible; PMs add their practices'
   tasks; Owners see everything. Editing needs assignee, creator or Owner.
+  **A PM's scope is the practice, not the person**: a task belonging to another
+  practice stays hidden even when its assignee is someone the PM shares a
+  practice with. Only a task with **no practice at all** is placed by who holds
+  it. The Team page counts through `teamTaskScope()` for the same reason, so a
+  shared biller's totals match the list they link to.
+- **A biller cannot close a task with an empty timer** — `PATCH
+  /api/tasks/[taskId]` returns 400 "Timer entry required before closing". PMs
+  and Owners are exempt: they close work they manage but did not personally do.
+  `actualMinutes` is **derived from `totalLoggedMinutes` on close**, never sent
+  by the client, and the close form shows it read-only.
 - Every task status change appends a `TaskNote`, with the caller's optional
   note joined on. The same now applies to todos.
 - Recurrence in [lib/todo/recurrence.ts](lib/todo/recurrence.ts): creating a
@@ -163,15 +173,28 @@ Tuesday" survives independently of the schedule.
   Prisma**, so the form can import it.
   [lib/task/recurrence.ts](lib/task/recurrence.ts) adds the writes and
   re-exports it.
-- Creating generates the first 3 occurrences; closing one calls
-  `createNextInstance()`; closing the **parent** calls `closeSeries()`, which
-  closes every pending child with a note.
+- **An occurrence is created on its due date, not in advance.** Creating a
+  series writes exactly one row (`generateFirstInstance()`); every later
+  occurrence appears on the day it is due. A queue stacked with next week's
+  work is noise, and closing one early records work against a day that has not
+  happened.
+  - `generateDueInstances()` is the scheduler. There is no cron, so it runs
+    from `GET /api/tasks`, `GET /api/tasks/my-tasks` and the dashboard fetch —
+    the same lazy-but-reliable pattern as `checkHoldReleases()`. Add it to any
+    new entry point that lists tasks.
+  - `createNextInstance()` (called when an occurrence closes) writes nothing
+    while the next date is still in the future; the mark already names it.
+  - A series dormant longer than `MAX_CATCH_UP` (7 days) is **fast-forwarded,
+    not backfilled** — a month of backdated daily tasks helps nobody.
+- Closing the **parent** calls `closeSeries()`, which closes every pending
+  child with a note.
 - `dayOfMonth` is capped at **28** so every month has the day.
-- `actualMinutes` is collected when a task is closed and logged as its own
+- `actualMinutes` comes from the timer on close and is logged as its own
   note — that is where anyone comparing against the estimate will look.
 
 ```bash
 npx tsx scripts/test-tasks.ts       # hold-release automation
+npx tsx scripts/test-task-scoping.ts # PM sees their practices, not their billers'
 npx tsx scripts/test-recurrence.ts  # recurrence dates, series generation, task types
 npx tsx scripts/test-timer.ts       # task timer, edit window, overlap rule
 npx tsx scripts/test-schedule.ts    # 24h grid geometry, provider roster match
@@ -284,6 +307,27 @@ built to take more modules without touching the routes or pages.
   *logged in the window*, so a past period's report never changes.
 - "Claims worked" and "moved to green" count **distinct claims**; the rest
   count notes.
+- The practice filter is one helper, `practiceFilterFor()` in
+  [lib/productivity/types.ts](lib/productivity/types.ts): the top bar's single
+  `practiceId` wins, otherwise the report's own `practiceIds` multi-select.
+- Time and task-type output live in
+  [lib/productivity/task-time.ts](lib/productivity/task-time.ts). Time is
+  selected by **`startedAt`**, exactly as the Time Log module does, so the
+  hours on the two pages are the same hours; the **Overall efficiency card
+  calls `getTimeLogSummary()`** rather than working the rate out a second way.
+- The task-type breakdown shows only types with a **closed** task in the
+  window — the question is what got finished. Time on a type that closed
+  nothing still counts towards the total.
+- `/productivity` filters live in the **URL** (`preset`/`from`/`to`,
+  `userIds`, `practiceIds`), so the page stays a server component and any view
+  of the report is a link. Both lists are re-narrowed against
+  `accessiblePracticeIds()` server-side.
+- The **AR dashboard's biller panel** is `arBillerActivity()` in
+  [lib/ar-summary.ts](lib/ar-summary.ts), shared by the page and
+  `/api/ar/dashboard`. Note counts and the roster are both practice-scoped: a
+  PM sees their practices' work, by the people who share those practices.
+- `GET /api/settings/practices` is scoped the same way — a PM lists the
+  practices they manage, and the detail page 404s for the others.
 
 ```bash
 npx tsx scripts/test-notes.ts      # generated note text for all 8 outcomes

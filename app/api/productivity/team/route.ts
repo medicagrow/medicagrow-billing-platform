@@ -29,11 +29,24 @@ export async function GET(request: NextRequest) {
       ? requested
       : undefined;
 
+  const list = (value: string | null) =>
+    (value ?? "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== "");
+
+  // The report's own practice filter, narrowed the same way.
+  const selectedPracticeIds = list(searchParams.get("practiceIds")).filter(
+    (id) => practiceIds === null || practiceIds.includes(id),
+  );
+
   const team = await getTeamProductivity({
     from,
     to,
     practiceId,
+    selectedPracticeIds,
     practiceIds,
+    userIds: list(searchParams.get("userIds")),
   });
 
   return NextResponse.json({
@@ -44,5 +57,6 @@ export async function GET(request: NextRequest) {
       preset,
     },
     practiceId: practiceId ?? null,
+    practiceIds: selectedPracticeIds,
   });
 }

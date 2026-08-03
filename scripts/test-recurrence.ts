@@ -112,88 +112,179 @@ async function main() {
   const owner = await prisma.user.findFirst({ where: { role: "OWNER" } });
   if (!owner) throw new Error("no owner user to attribute test rows to");
 
-  const { createNextInstance, generateInitialInstances, closeSeries } =
-    await import("../lib/task/recurrence");
+  const {
+    createNextInstance,
+    generateDueInstances,
+    generateFirstInstance,
+    closeSeries,
+  } = await import("../lib/task/recurrence");
 
   console.log("\n=== series generation ===");
+
+  // Dates are relative to today, because "due" is now the whole point.
+  const now = new Date();
+  const todayUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  const shift = (days: number) => {
+    const date = new Date(todayUtc.getTime());
+    date.setUTCDate(date.getUTCDate() + days);
+    return toIsoDate(date);
+  };
+
+  const today = toIsoDate(todayUtc);
+
+  const mark = async (id: string) =>
+    parseRecurringConfig(
+      (await prisma.task.findUnique({ where: { id } }))!.recurringConfig,
+    )?.nextDueDate ?? "none";
+
+  const reload = async (id: string) =>
+    (await prisma.task.findUnique({ where: { id } }))!;
+
+  /**
+   * The sweep is deliberately not scoped to one series, so the test series are
+   * assigned to a throwaway user. Sweeping by the owner would generate real
+   * occurrences on whatever real series they happen to own.
+   */
+  const assignee = await prisma.user.create({
+    data: {
+      name: "ZZ Recurrence Assignee",
+      email: `zz-recurrence-${Date.now()}@example.test`,
+      hashedPassword: "not-a-real-hash",
+    },
+  });
 
   const parent = await prisma.task.create({
     data: {
       title: "ZZ Recurring parent",
       createdById: owner.id,
-      assignedToId: owner.id,
+      assignedToId: assignee.id,
       isRecurring: true,
-      recurringConfig: {
-        frequency: "weekly",
-        daysOfWeek: [1, 2, 3, 4, 5],
-        nextDueDate: "2026-07-30",
-      },
+      recurringConfig: { frequency: "daily", nextDueDate: today },
     },
   });
 
-  const initial = await generateInitialInstances(parent, 3);
-  check("generates three instances", initial.length === 3, String(initial.length));
+  const first = await generateFirstInstance(parent);
+  check("creating a series makes one instance", first !== null);
+  check("it is numbered 1", first?.instanceNumber === 1, String(first?.instanceNumber));
   check(
-    "instances numbered from 1",
-    initial.map((task) => task.instanceNumber).join(",") === "1,2,3",
-    initial.map((task) => task.instanceNumber).join(","),
+    "it is dated the first occurrence",
+    first?.dueDate !== null && first?.dueDate !== undefined &&
+      toIsoDate(first.dueDate) === today,
+    first?.dueDate ? toIsoDate(first.dueDate) : "none",
   );
+  check("it inherits the assignee", first?.assignedToId === assignee.id);
+  check("it is not itself recurring", first?.isRecurring === false);
+
+  const onlyOne = await prisma.task.count({ where: { parentTaskId: parent.id } });
+  check("nothing else was generated up front", onlyOne === 1, String(onlyOne));
+
   check(
-    "instances inherit the assignee",
-    initial.every((task) => task.assignedToId === owner.id),
-  );
-  check(
-    "instances are not themselves recurring",
-    initial.every((task) => !task.isRecurring),
+    "the mark moved to tomorrow",
+    (await mark(parent.id)) === shift(1),
+    await mark(parent.id),
   );
 
-  const advanced = await prisma.task.findUnique({ where: { id: parent.id } });
-  const advancedConfig = parseRecurringConfig(advanced!.recurringConfig);
+  console.log("\n=== an occurrence is not created before it is due ===");
+
+  const early = await createNextInstance(await reload(parent.id));
+  check("closing today's does not create tomorrow's", early === null);
   check(
-    "parent advanced past the generated dates",
-    advancedConfig?.nextDueDate === "2026-08-04",
-    advancedConfig?.nextDueDate ?? "none",
+    "and the mark stays on tomorrow",
+    (await mark(parent.id)) === shift(1),
+    await mark(parent.id),
   );
 
-  console.log("\n=== completing tops the series up ===");
+  const stillOne = await prisma.task.count({ where: { parentTaskId: parent.id } });
+  check("still one instance", stillOne === 1, String(stillOne));
 
-  const fourth = await createNextInstance(advanced!);
-  check("a fourth instance is created", fourth !== null);
+  console.log("\n=== the sweep creates what has come due ===");
+
+  const untouched = await generateDueInstances({ assignedToId: assignee.id });
   check(
-    "it is numbered 4",
-    fourth?.instanceNumber === 4,
-    String(fourth?.instanceNumber),
-  );
-  check(
-    "it takes the parent's next date",
-    fourth?.dueDate?.toISOString().slice(0, 10) === "2026-08-04",
-    fourth?.dueDate?.toISOString().slice(0, 10) ?? "none",
+    "a series marked for tomorrow generates nothing",
+    untouched.created === 0,
+    String(untouched.created),
   );
 
-  // Generating the same date twice would double the work, not repeat it.
-  const stale = await prisma.task.findUnique({ where: { id: parent.id } });
+  // Wind the mark back two days: yesterday and today are now both overdue.
   await prisma.task.update({
     where: { id: parent.id },
+    data: { recurringConfig: { frequency: "daily", nextDueDate: shift(-1) } },
+  });
+
+  const swept = await generateDueInstances({ assignedToId: assignee.id });
+  check("the missed day is created", swept.created === 1, String(swept.created));
+  check("one series produced it", swept.series === 1, String(swept.series));
+  check(
+    "today's was left alone as it already exists",
+    (await prisma.task.count({ where: { parentTaskId: parent.id } })) === 2,
+    String(await prisma.task.count({ where: { parentTaskId: parent.id } })),
+  );
+  check(
+    "the mark ends up past today",
+    (await mark(parent.id)) === shift(1),
+    await mark(parent.id),
+  );
+
+  console.log("\n=== a long backlog is fast-forwarded, not backfilled ===");
+
+  const dormant = await prisma.task.create({
     data: {
-      recurringConfig: { ...parseRecurringConfig(stale!.recurringConfig)!, nextDueDate: "2026-08-04" },
+      title: "ZZ Recurring dormant",
+      createdById: owner.id,
+      assignedToId: assignee.id,
+      isRecurring: true,
+      recurringConfig: { frequency: "daily", nextDueDate: shift(-30) },
     },
   });
 
-  const reloaded = await prisma.task.findUnique({ where: { id: parent.id } });
-  const duplicate = await createNextInstance(reloaded!);
-  check("a clashing date creates nothing", duplicate === null);
+  const caught = await generateDueInstances({ assignedToId: assignee.id });
+  const dormantCount = await prisma.task.count({
+    where: { parentTaskId: dormant.id },
+  });
+  check(
+    "at most a week of catch-up is created",
+    dormantCount === 7,
+    String(dormantCount),
+  );
+  check("the sweep reports what it wrote", caught.created === 7, String(caught.created));
+  check(
+    "the newest catch-up instance is today's",
+    (await prisma.task.findFirst({
+      where: { parentTaskId: dormant.id },
+      orderBy: { dueDate: "desc" },
+      select: { dueDate: true },
+    }))!.dueDate!.toISOString().slice(0, 10) === today,
+  );
+  check(
+    "and the mark is back on schedule",
+    (await mark(dormant.id)) === shift(1),
+    await mark(dormant.id),
+  );
 
-  const afterClash = await prisma.task.findUnique({ where: { id: parent.id } });
+  console.log("\n=== a date already scheduled is never doubled ===");
+
+  await prisma.task.update({
+    where: { id: parent.id },
+    data: { recurringConfig: { frequency: "daily", nextDueDate: today } },
+  });
+
+  const duplicate = await createNextInstance(await reload(parent.id));
+  check("a clashing date creates nothing", duplicate === null);
   check(
     "but the series still advances past it",
-    parseRecurringConfig(afterClash!.recurringConfig)?.nextDueDate !== "2026-08-04",
-    parseRecurringConfig(afterClash!.recurringConfig)?.nextDueDate ?? "none",
+    (await mark(parent.id)) === shift(1),
+    await mark(parent.id),
   );
 
   console.log("\n=== closing the parent closes the series ===");
 
+  // Two: today's and the one the sweep created for the missed day. A series
+  // no longer carries a stack of future occurrences to close.
   const closed = await closeSeries(parent.id, owner.id);
-  check("pending instances were closed", closed >= 4, String(closed));
+  check("pending instances were closed", closed === 2, String(closed));
 
   const stillOpen = await prisma.task.count({
     where: { parentTaskId: parent.id, status: { not: TaskStatus.CLOSED } },
@@ -203,7 +294,7 @@ async function main() {
   const noteCount = await prisma.taskNote.count({
     where: { task: { parentTaskId: parent.id } },
   });
-  check("each closure was logged", noteCount >= 4, String(noteCount));
+  check("each closure was logged", noteCount === closed, String(noteCount));
 
   console.log("\n=== task types ===");
 
@@ -239,12 +330,22 @@ async function main() {
     types.every((type, i) => i === 0 || types[i - 1]!.sortOrder <= type.sortOrder),
   );
 
-  // Cleanup — children first, then the parent they cascade from.
+  // Cleanup — notes first, then children, then the parents they hang off.
   await prisma.taskNote.deleteMany({
-    where: { task: { OR: [{ id: parent.id }, { parentTaskId: parent.id }] } },
+    where: {
+      task: {
+        OR: [
+          { title: { startsWith: "ZZ " } },
+          { parentTask: { title: { startsWith: "ZZ " } } },
+        ],
+      },
+    },
   });
-  await prisma.task.deleteMany({ where: { parentTaskId: parent.id } });
+  await prisma.task.deleteMany({
+    where: { parentTask: { title: { startsWith: "ZZ " } } },
+  });
   await prisma.task.deleteMany({ where: { title: { startsWith: "ZZ " } } });
+  await prisma.user.delete({ where: { id: assignee.id } });
 
   const leftover = await prisma.task.count({
     where: { title: { startsWith: "ZZ " } },

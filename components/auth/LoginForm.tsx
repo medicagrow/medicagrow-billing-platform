@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { useEffect, useState, type FormEvent } from "react";
+import { useSearchParams } from "next/navigation";
+import { getCsrfToken, signIn } from "next-auth/react";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Input";
 import { SensitiveInput } from "@/components/ui/SensitiveInput";
@@ -22,10 +22,37 @@ function messageForError(code: string) {
   }
 }
 
+/**
+ * Only same-origin paths are followed after sign-in. `callbackUrl` arrives from
+ * the query string, so an absolute URL there would be an open redirect.
+ */
+function safePath(value: string | null | undefined, fallback = "/"): string {
+  if (!value) return fallback;
+  // "//evil.com" is protocol-relative and leaves the origin.
+  return value.startsWith("/") && !value.startsWith("//") ? value : fallback;
+}
+
+/**
+ * Where to land after a successful sign-in. NextAuth echoes back an absolute
+ * URL; only its path is used, and only when it points at this origin.
+ */
+function resolveDestination(url: string | null | undefined, fallback: string) {
+  if (!url) return fallback;
+
+  try {
+    const parsed = new URL(url, window.location.origin);
+
+    if (parsed.origin !== window.location.origin) return fallback;
+
+    return safePath(`${parsed.pathname}${parsed.search}`, fallback);
+  } catch {
+    return fallback;
+  }
+}
+
 export function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") ?? "/";
+  const callbackUrl = safePath(searchParams.get("callbackUrl"));
 
   // NextAuth redirects here with ?error=... when its own flow fails.
   const initialError = searchParams.get("error");
@@ -36,6 +63,19 @@ export function LoginForm() {
     initialError ? messageForError(initialError) : null,
   );
   const [submitting, setSubmitting] = useState(false);
+
+  /**
+   * NextAuth mints the CSRF token on the first call to /api/auth/csrf and sets
+   * the paired cookie in that response. `signIn()` will fetch it itself, but
+   * doing it here means the token and its cookie are already in place when the
+   * form is first submitted, rather than being established during the same
+   * click that depends on them.
+   */
+  useEffect(() => {
+    getCsrfToken().catch(() => {
+      // Nothing to do — signIn() fetches it again and reports the failure.
+    });
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -57,16 +97,32 @@ export function LoginForm() {
         setError(
           "Could not reach the authentication server. Restart the dev server and try again.",
         );
+        setSubmitting(false);
         return;
       }
 
       if (result.error) {
         setError(messageForError(result.error));
+        setSubmitting(false);
         return;
       }
 
-      router.replace(result.url ?? callbackUrl);
-      router.refresh();
+      /**
+       * A full document load, not `router.replace()`.
+       *
+       * The session cookie has just been set by the sign-in response, and every
+       * page behind the shell is server-rendered behind middleware that reads
+       * it. A client-side navigation asks the router for an RSC payload while
+       * the App Router cache still holds the entry for /login — and pairing it
+       * with `router.refresh()` raced two navigations against each other, which
+       * is why the first attempt appeared to do nothing and the second worked.
+       * Reloading the document makes the server the only thing deciding where
+       * the user lands, with the new cookie already attached.
+       *
+       * `submitting` deliberately stays true: the browser is now navigating,
+       * and dropping back to "Sign in" mid-flight reads as a failure.
+       */
+      window.location.assign(resolveDestination(result.url, callbackUrl));
     } catch (cause) {
       console.error("Sign-in request failed:", cause);
       setError(
@@ -74,8 +130,6 @@ export function LoginForm() {
           ? `Sign-in request failed: ${cause.message}`
           : "Sign-in request failed unexpectedly.",
       );
-    } finally {
-      // Always clears, so the button can never stick on "Signing in…".
       setSubmitting(false);
     }
   }
@@ -132,6 +186,21 @@ export function LoginForm() {
           "Sign in"
         )}
       </Button>
+
+      {/*
+        Signing in takes a few seconds — a cold serverless function, a password
+        hash comparison and then a full page load. Saying so keeps the wait
+        looking deliberate instead of stuck.
+      */}
+      {submitting ? (
+        <p
+          aria-live="polite"
+          className="flex items-center justify-center gap-2 text-xs text-slate-500"
+        >
+          <SpinnerIcon className="h-3 w-3 animate-spin" />
+          Checking your credentials and loading your workspace…
+        </p>
+      ) : null}
     </form>
   );
 }

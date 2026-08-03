@@ -7,7 +7,7 @@ import {
   type PracticeDetail,
 } from "@/components/settings/PracticeDetailTabs";
 import { Badge } from "@/components/ui/Badge";
-import { canManageBatches } from "@/lib/ar-access";
+import { accessiblePracticeIds, canManageBatches } from "@/lib/ar-access";
 import { Role } from "@/lib/generated/prisma/enums";
 import { formatPhone } from "@/lib/phone";
 import { prisma } from "@/lib/prisma";
@@ -36,6 +36,12 @@ export default async function PracticeDetailPage({
   });
 
   if (!practice) notFound();
+
+  // A PM reaching a practice they do not manage — by URL, since it is not in
+  // their list — is told it does not exist rather than shown its details.
+  const accessible = await accessiblePracticeIds(user);
+
+  if (accessible !== null && !accessible.includes(practice.id)) notFound();
 
   // Stored normalised; formatted for display on the way in.
   const projectManagers = await prisma.user.findMany({

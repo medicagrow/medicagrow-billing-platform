@@ -11,6 +11,10 @@ import {
   getWorkRecentActivity,
 } from "@/lib/productivity/work-productivity";
 import {
+  getLoggedMinutes,
+  getTaskTypeProductivity,
+} from "@/lib/productivity/task-time";
+import {
   totalActivity,
   type ActivityDetailPage,
   type ActivityDetailProvider,
@@ -78,6 +82,12 @@ export async function getBillerProductivity(
 
   if (!user) return null;
 
+  const [activities, totalLoggedMinutes, taskTypeBreakdown] = await Promise.all([
+    getActivitySummaries(query),
+    getLoggedMinutes(query),
+    getTaskTypeProductivity(query),
+  ]);
+
   return {
     userId: user.id,
     userName: user.name,
@@ -86,7 +96,9 @@ export async function getBillerProductivity(
       user.role === Role.OWNER
         ? ["All practices"]
         : user.practices.map((entry) => entry.practice.name),
-    activities: await getActivitySummaries(query),
+    activities,
+    totalLoggedMinutes,
+    taskTypeBreakdown,
     dateRange: { from: query.from, to: query.to },
   };
 }
@@ -99,8 +111,12 @@ export async function getTeamProductivity(query: {
   from: Date;
   to: Date;
   practiceId?: string;
+  /** The report's own practice filter, already narrowed to what is allowed. */
+  selectedPracticeIds?: string[];
   /** Restrict to practices the caller can see; null means all. */
   practiceIds: string[] | null;
+  /** The report's biller filter; empty or absent means everyone in scope. */
+  userIds?: string[];
 }): Promise<BillerProductivity[]> {
   const users = await prisma.user.findMany({
     where: {
@@ -110,6 +126,9 @@ export async function getTeamProductivity(query: {
       ...(query.practiceIds === null
         ? {}
         : { practices: { some: { practiceId: { in: query.practiceIds } } } }),
+      ...(query.userIds && query.userIds.length > 0
+        ? { id: { in: query.userIds } }
+        : {}),
     },
     orderBy: { name: "asc" },
     select: {
@@ -121,19 +140,33 @@ export async function getTeamProductivity(query: {
   });
 
   const entries = await Promise.all(
-    users.map(async (user) => ({
-      userId: user.id,
-      userName: user.name,
-      role: user.role,
-      assignedPractices: user.practices.map((entry) => entry.practice.name),
-      activities: await getActivitySummaries({
+    users.map(async (user) => {
+      const scoped = {
         userId: user.id,
         from: query.from,
         to: query.to,
         practiceId: query.practiceId,
-      }),
-      dateRange: { from: query.from, to: query.to },
-    })),
+        practiceIds: query.selectedPracticeIds,
+      };
+
+      const [activities, totalLoggedMinutes, taskTypeBreakdown] =
+        await Promise.all([
+          getActivitySummaries(scoped),
+          getLoggedMinutes(scoped),
+          getTaskTypeProductivity(scoped),
+        ]);
+
+      return {
+        userId: user.id,
+        userName: user.name,
+        role: user.role,
+        assignedPractices: user.practices.map((entry) => entry.practice.name),
+        activities,
+        totalLoggedMinutes,
+        taskTypeBreakdown,
+        dateRange: { from: query.from, to: query.to },
+      };
+    }),
   );
 
   return entries.sort(

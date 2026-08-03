@@ -8,6 +8,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { TASK_INCLUDE, toTaskDto } from "@/lib/task-serialize";
+import { generateDueInstances } from "@/lib/task/recurrence";
 import { checkHoldReleases } from "@/lib/todo/hold-release";
 import { dayEnd, dayStart } from "@/lib/todo/access";
 
@@ -23,8 +24,12 @@ export async function GET(request: NextRequest) {
   const denied = requireAuth(session);
   if (denied) return denied;
 
-  // Anything whose hold expired must be back in the list before it is read.
-  await checkHoldReleases(session!.user.id);
+  // Anything whose hold expired must be back in the list before it is read,
+  // and any recurring occurrence that came due must exist by now.
+  await Promise.all([
+    checkHoldReleases(session!.user.id),
+    generateDueInstances({ assignedToId: session!.user.id }),
+  ]);
 
   const searchParams = request.nextUrl.searchParams;
   const pagination = parsePagination(searchParams);

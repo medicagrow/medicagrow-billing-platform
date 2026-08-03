@@ -8,6 +8,7 @@ import {
 } from "@/lib/productivity/work-activities";
 import {
   buildDrillDownUrl,
+  practiceFilterFor,
   type ActivityBreakdown,
   type ActivityDetailPage,
   type ActivitySummary,
@@ -27,7 +28,7 @@ export async function getWorkProductivity(
   const window = {
     completedById: query.userId,
     completedAt: { gte: query.from, lte: query.to },
-    ...(query.practiceId ? { practiceId: query.practiceId } : {}),
+    ...practiceFilterFor(query),
   };
 
   const [tasksCompleted, todosCompleted] = await Promise.all([
@@ -118,7 +119,7 @@ export async function getWorkActivityDetail(
   const where = {
     completedById: query.userId,
     completedAt: { gte: query.from, lte: query.to },
-    ...(query.practiceId ? { practiceId: query.practiceId } : {}),
+    ...practiceFilterFor(query),
     ...(isTask
       ? { status: TaskStatus.CLOSED }
       : { status: TodoStatus.CLOSED }),
@@ -191,7 +192,7 @@ export async function getWorkRecentActivity(
   const window = {
     completedById: query.userId,
     completedAt: { gte: query.from, lte: query.to },
-    ...(query.practiceId ? { practiceId: query.practiceId } : {}),
+    ...practiceFilterFor(query),
   };
 
   const [tasks, todos] = await Promise.all([

@@ -8,6 +8,7 @@ import { accessiblePracticeIds, canManageBatches } from "@/lib/ar-access";
 import { Role, TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { teamTaskScope } from "@/lib/task-access";
 import {
   activeTaskTypes,
   assignableUsersFor,
@@ -65,10 +66,12 @@ export default async function TeamTasksPage({
 
   const today = dayStart();
 
-  const practiceFilter =
-    selectedPracticeIds.length > 0
-      ? { practiceId: { in: selectedPracticeIds } }
-      : {};
+  // A PM sees a shared biller's work for *their* practices only, never the
+  // whole of that person's workload.
+  const practiceFilter = teamTaskScope({
+    accessiblePracticeIds: practiceIds,
+    selectedPracticeIds,
+  });
 
   const stats = await Promise.all(
     members.map(async (member) => {

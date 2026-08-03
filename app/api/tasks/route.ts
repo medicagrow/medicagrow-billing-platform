@@ -11,7 +11,10 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { canAssignTask, taskVisibilityFilter } from "@/lib/task-access";
 import { TASK_INCLUDE, toTaskDto } from "@/lib/task-serialize";
-import { generateInitialInstances } from "@/lib/task/recurrence";
+import {
+  generateDueInstances,
+  generateFirstInstance,
+} from "@/lib/task/recurrence";
 import { dayStart } from "@/lib/todo/access";
 import { createTaskSchema, listTasksQuerySchema } from "@/lib/validations/task";
 
@@ -22,15 +25,16 @@ import { createTaskSchema, listTasksQuerySchema } from "@/lib/validations/task";
  */
 const NOT_CLOSED = [TaskStatus.OPEN, TaskStatus.IN_PROCESS, TaskStatus.HOLD];
 
-/** Occurrences generated up front when a recurring task is created. */
-const INITIAL_INSTANCES = 3;
-
 /** GET /api/tasks — visibility-scoped, filtered, paginated. */
 export async function GET(request: NextRequest) {
   const session = await getSession();
 
   const denied = requireAuth(session);
   if (denied) return denied;
+
+  // This list crosses the whole team, so the sweep is not narrowed to the
+  // caller: any occurrence that came due must exist before the page is built.
+  await generateDueInstances();
 
   const searchParams = request.nextUrl.searchParams;
 
@@ -163,14 +167,14 @@ export async function POST(request: NextRequest) {
     include: TASK_INCLUDE,
   });
 
-  // Seeding the first few occurrences makes the series visible in planning
-  // views straight away instead of appearing one at a time.
-  const instances = input.isRecurring
-    ? await generateInitialInstances(task as never, INITIAL_INSTANCES)
-    : [];
+  // Only the first occurrence is written now. The rest are created on their
+  // own due dates by generateDueInstances().
+  const first = input.isRecurring
+    ? await generateFirstInstance(task as never)
+    : null;
 
   return NextResponse.json(
-    { task: toTaskDto(task), generatedInstances: instances.length },
+    { task: toTaskDto(task), generatedInstances: first ? 1 : 0 },
     { status: 201 },
   );
 }
