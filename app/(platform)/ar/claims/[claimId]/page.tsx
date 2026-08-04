@@ -16,11 +16,13 @@ import { EmptyState } from "@/components/ui/Card";
 import { canAccessBatch, canManageBatches } from "@/lib/ar-access";
 import { OUTCOME_LABELS } from "@/lib/ar-outcomes";
 import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
+import { describeEscalationTarget } from "@/lib/escalation";
 import { startOfTodayUtc } from "@/lib/ar-stats";
 import { formatDate, formatUSD } from "@/lib/format";
 import { BatchStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { formatDateTimeIST } from "@/lib/timezone";
 
 export const metadata: Metadata = { title: "Claim Detail" };
 export const dynamic = "force-dynamic";
@@ -97,6 +99,13 @@ export default async function ClaimDetailPage({
   if (!claim || !(await canAccessBatch(user, claim.batchId))) {
     notFound();
   }
+
+  // Where a hand-over would land, resolved through the same chain the save
+  // uses — so the form's promise and the routing cannot disagree.
+  const escalation = await describeEscalationTarget({
+    practiceId: claim.batch.practice.id,
+    batchOwnerId: claim.batch.uploadedById,
+  });
 
   const windowStart = new Date(claim.dateOfService);
   windowStart.setUTCDate(windowStart.getUTCDate() - PRIOR_HISTORY_DAY_WINDOW);
@@ -336,10 +345,7 @@ export default async function ClaimDetailPage({
                       ) : null}
                       <p className="mt-2 text-[11px] text-slate-400">
                         {note.workedBy.name} ·{" "}
-                        {new Date(note.workedAt).toLocaleString("en-US", {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        })}
+                        {formatDateTimeIST(note.workedAt)}
                         {note.followUpDateSet
                           ? ` · follow-up ${formatDate(note.followUpDateSet)}`
                           : ""}
@@ -358,7 +364,8 @@ export default async function ClaimDetailPage({
             <WorkNoteForm
               claimId={claim.id}
               claimNumber={claim.claimNumber}
-              projectManagerName={claim.batch.uploadedBy.name}
+              projectManagerName={escalation.name ?? claim.batch.uploadedBy.name}
+              hasPrimaryPm={escalation.hasPrimaryPm}
               disabled={!canWorkClaim}
               disabledReason={
                 closed

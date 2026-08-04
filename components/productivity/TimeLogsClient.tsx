@@ -7,7 +7,7 @@ import { Select } from "@/components/ui/Select";
 import { MultiSelectDropdown } from "@/components/ui/MultiSelectDropdown";
 import { downloadCsv } from "@/lib/csv-export";
 import { usePractice } from "@/lib/contexts/PracticeContext";
-import { formatDate } from "@/lib/format";
+import { formatDateIST, formatTimeIST } from "@/lib/timezone";
 import { TaskStatus } from "@/lib/generated/prisma/enums";
 import { resolvePreset, toDateParam } from "@/lib/productivity/date-ranges";
 import { formatMinutes } from "@/lib/task-timer-serialize";
@@ -89,17 +89,9 @@ function overrunTone(percent: number): string {
   return percent > 20 ? "text-red-600" : "text-amber-600";
 }
 
-const timeFormatter = new Intl.DateTimeFormat("en-US", {
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-  timeZone: "UTC",
-});
-
+/** Session clock times, in the timezone the team actually works in. */
 function formatTime(value: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : timeFormatter.format(date);
+  return formatTimeIST(value);
 }
 
 function SummaryCard({
@@ -329,7 +321,8 @@ export function TimeLogsClient({
         "Task over estimate",
       ],
       sessions.map((row) => [
-        row.startedAt.slice(0, 10),
+        // The IST date, matching the column on screen — not the UTC one.
+        formatDateIST(row.startedAt),
         row.userName,
         row.taskLabel,
         row.practiceName ?? "",
@@ -908,7 +901,7 @@ export function TimeLogsClient({
                   {sessions.map((row) => (
                     <tr key={row.id} className="border-b border-slate-100">
                       <td className="py-2 pr-3 whitespace-nowrap text-slate-600">
-                        {formatDate(row.startedAt)}
+                        {formatDateIST(row.startedAt)}
                       </td>
                       <td className="py-2 pr-3 text-slate-700">
                         {row.userName}

@@ -16,7 +16,12 @@ export const dynamic = "force-dynamic";
 export default async function TaskListPage({
   searchParams,
 }: {
-  searchParams: { assignedToId?: string; status?: string; practiceId?: string };
+  searchParams: {
+    assignedToId?: string;
+    status?: string;
+    practiceId?: string;
+    overdue?: string;
+  };
 }) {
   const user = await requireUser();
 
@@ -53,6 +58,7 @@ export default async function TaskListPage({
           assignedToId: searchParams.assignedToId,
           status: searchParams.status,
           practiceId: searchParams.practiceId,
+          overdue: searchParams.overdue === "true",
         }}
       />
     </div>

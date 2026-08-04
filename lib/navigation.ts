@@ -131,9 +131,11 @@ export const arSubNav: SubNavItem[] = [
     roles: [Role.OWNER, Role.PROJECT_MANAGER],
   },
   {
+    // A biller gets the same page scoped to their own claims — their
+    // scorecard rather than the practice's.
     label: "Dashboard",
     href: "/ar/dashboard",
-    roles: [Role.OWNER, Role.PROJECT_MANAGER],
+    roles: [Role.OWNER, Role.PROJECT_MANAGER, Role.BILLER],
   },
   {
     label: "Denial Reasons",

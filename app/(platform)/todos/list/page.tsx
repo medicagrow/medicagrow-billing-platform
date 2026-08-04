@@ -4,7 +4,7 @@ import { TodoListClient } from "@/components/todo/TodoListClient";
 import { accessiblePracticeIds } from "@/lib/ar-access";
 import { Role } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/session";
+import { requireNonBiller } from "@/lib/session";
 
 export const metadata: Metadata = { title: "All To Dos" };
 export const dynamic = "force-dynamic";
@@ -12,9 +12,13 @@ export const dynamic = "force-dynamic";
 export default async function TodoListPage({
   searchParams,
 }: {
-  searchParams: { assignedToId?: string };
+  searchParams: {
+    assignedToId?: string;
+    dueToday?: string;
+    overdue?: string;
+  };
 }) {
-  const user = await requireUser();
+  const user = await requireNonBiller();
 
   const practiceIds = await accessiblePracticeIds(user);
   const canReassign = user.role !== Role.BILLER;
@@ -58,6 +62,13 @@ export default async function TodoListPage({
         canReassign={canReassign}
         currentUserId={user.id}
         initialAssignedToId={searchParams.assignedToId}
+        initialDueQuick={
+          searchParams.overdue === "true"
+            ? "overdue"
+            : searchParams.dueToday === "true"
+              ? "today"
+              : "none"
+        }
       />
     </div>
   );

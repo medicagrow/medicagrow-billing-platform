@@ -19,6 +19,7 @@ export function EobNoteForm({
   assignees,
   canReassign,
   projectManagerName,
+  hasPrimaryPm = false,
   disabled,
   disabledReason,
 }: {
@@ -26,7 +27,10 @@ export function EobNoteForm({
   currentStatus: string;
   assignees: { id: string; name: string }[];
   canReassign: boolean;
+  /** Who the escalation chain resolves to right now — not always a PM. */
   projectManagerName: string;
+  /** False when the practice has no primary PM and the chain falls through. */
+  hasPrimaryPm?: boolean;
   disabled?: boolean;
   disabledReason?: string;
 }) {
@@ -37,6 +41,7 @@ export function EobNoteForm({
   const [statusLabel, setStatusLabel] = useState(currentStatus);
   const [assignedToChangedId, setAssignedToChangedId] = useState("");
   const [resolutionNote, setResolutionNote] = useState("");
+  const [reassignToPm, setReassignToPm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -65,6 +70,7 @@ export function EobNoteForm({
           statusChangedTo: statusLabel,
           assignedToChangedId: assignedToChangedId || undefined,
           resolutionNote: resolving ? resolutionNote.trim() || undefined : undefined,
+          reassignToPm,
         }),
       });
 
@@ -86,6 +92,7 @@ export function EobNoteForm({
       setNote("");
       setResolutionNote("");
       setAssignedToChangedId("");
+      setReassignToPm(false);
       router.refresh();
     } catch {
       setError("Could not save the note. Check your connection.");
@@ -143,7 +150,7 @@ export function EobNoteForm({
               id="eobAssign"
               value={assignedToChangedId}
               onChange={(event) => setAssignedToChangedId(event.target.value)}
-              disabled={saving || goesBlue}
+              disabled={saving || goesBlue || reassignToPm}
             >
               <option value="">Leave as is</option>
               {assignees.map((user) => (
@@ -180,6 +187,36 @@ export function EobNoteForm({
           coordination after saving.
         </p>
       ) : null}
+
+      {/*
+        Hand-over on demand. Blue statuses already do this by themselves, so
+        the checkbox is redundant there and says so rather than pretending to
+        be the thing that caused it.
+      */}
+      <div className="rounded-lg border border-slate-200 px-3 py-2.5">
+        <label className="flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={reassignToPm || goesBlue}
+            disabled={goesBlue || saving}
+            onChange={(event) => setReassignToPm(event.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-600"
+          />
+          <span>Reassign to Practice PM after saving</span>
+        </label>
+
+        {goesBlue ? (
+          <p className="mt-1 pl-6 text-xs text-slate-500">
+            This status already reassigns the entry.
+          </p>
+        ) : reassignToPm ? (
+          <p className="mt-1 pl-6 text-xs text-slate-600">
+            {hasPrimaryPm
+              ? `Entry will be reassigned to ${projectManagerName} upon saving`
+              : `No PM assigned to this practice — reassign will go to ${projectManagerName}`}
+          </p>
+        ) : null}
+      </div>
 
       {error ? <FieldError>{error}</FieldError> : null}
 

@@ -50,12 +50,15 @@ export function TodoListClient({
   canReassign,
   currentUserId,
   initialAssignedToId,
+  initialDueQuick = "none",
 }: {
   practices: { id: string; name: string }[];
   assignableUsers: { id: string; name: string }[];
   canReassign: boolean;
   currentUserId: string;
   initialAssignedToId?: string;
+  /** Seeded from the URL so a dashboard count lands on what it counted. */
+  initialDueQuick?: DueQuickFilter;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -79,7 +82,7 @@ export function TodoListClient({
   const [isShared, setIsShared] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [dueQuick, setDueQuick] = useState<DueQuickFilter>("none");
+  const [dueQuick, setDueQuick] = useState<DueQuickFilter>(initialDueQuick);
 
   const [sortKey, setSortKey] = useState<SortKey>("dueDate");
   const [ascending, setAscending] = useState(true);

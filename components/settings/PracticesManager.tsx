@@ -13,7 +13,7 @@ import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
 import { EhrSource } from "@/lib/generated/prisma/enums";
-import { formatDate } from "@/lib/format";
+import { formatDateIST } from "@/lib/timezone";
 
 interface PracticeRow {
   id: string;
@@ -200,7 +200,7 @@ export function PracticesManager({ canEdit }: { canEdit: boolean }) {
                     {practice.userCount}
                   </td>
                   <td className="px-4 py-3 text-slate-600">
-                    {formatDate(practice.createdAt)}
+                    {formatDateIST(practice.createdAt)}
                   </td>
                   <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-2">

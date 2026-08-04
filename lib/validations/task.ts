@@ -14,6 +14,15 @@ const optionalText = (max: number) =>
     // Zod treats an absent key as missing rather than "not provided".
     .optional();
 
+/**
+ * Ceiling on a task estimate, in minutes — a little under seven days.
+ *
+ * A day was too small: monthly work like a full charge-posting run is
+ * legitimately measured in tens of hours, and a 3,300-minute estimate was
+ * being rejected as invalid. Four digits also matches what the inputs accept.
+ */
+export const MAX_ESTIMATED_MINUTES = 9999;
+
 export const recurringConfigSchema = z.object({
   frequency: z.enum(["daily", "weekly", "biweekly", "monthly"]),
   daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).optional(),
@@ -39,7 +48,7 @@ export const createTaskSchema = z
     taskTypeId: z.string().min(1, "Please select a task type"),
     assignedToId: z.string().min(1, "Assignee is required"),
     dueDate: dateStringSchema.optional(),
-    estimatedMinutes: z.coerce.number().int().min(0).max(1440).optional(),
+    estimatedMinutes: z.coerce.number().int().min(0).max(MAX_ESTIMATED_MINUTES).optional(),
     priority: z.enum(TodoPriority).default(TodoPriority.MEDIUM),
     status: z.enum(TaskStatus).default(TaskStatus.OPEN),
     holdReleaseDate: dateStringSchema.optional(),
@@ -80,7 +89,7 @@ export const updateTaskSchema = z
       .number()
       .int()
       .min(0)
-      .max(1440)
+      .max(MAX_ESTIMATED_MINUTES)
       .nullable()
       .optional(),
     /**
@@ -144,6 +153,49 @@ export const listTasksQuerySchema = z.object({
     .enum(["dueDate", "priority", "title", "status", "createdAt"])
     .optional(),
   direction: z.enum(["asc", "desc"]).optional(),
+});
+
+/**
+ * How far a change to a recurring series reaches.
+ *
+ *   future — occurrences still to come, the safe default
+ *   this   — the occurrence in hand plus everything after it
+ *   all    — every occurrence, including ones already closed
+ *
+ * "all" is offered because a wrong practice or assignee on a series is worth
+ * correcting in the record, not only going forward.
+ */
+export const seriesScopeSchema = z.enum(["future", "this", "all"]);
+
+export type SeriesScope = z.infer<typeof seriesScopeSchema>;
+
+export const updateSeriesSchema = z.object({
+  scope: seriesScopeSchema.default("future"),
+  taskTypeId: z.string().min(1, "Please select a task type"),
+  practiceId: optionalText(40),
+  assignedToId: z.string().min(1, "Assignee is required"),
+  description: optionalText(4000),
+  estimatedMinutes: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_ESTIMATED_MINUTES)
+    .nullable()
+    .optional(),
+  priority: z.enum(TodoPriority).optional(),
+  tags: z.array(z.string().trim().max(40)).max(10).optional(),
+  recurringConfig: recurringConfigSchema.optional(),
+});
+
+/**
+ * Deleting an occurrence asks which of them you meant.
+ *
+ * `this` for the one in hand, `future` for it and everything still to come,
+ * `all` for the whole series including its history. A non-recurring task
+ * ignores the field.
+ */
+export const deleteTaskSchema = z.object({
+  scope: seriesScopeSchema.default("this"),
 });
 
 export const addTaskNoteSchema = z.object({

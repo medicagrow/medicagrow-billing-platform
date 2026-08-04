@@ -82,12 +82,15 @@ export async function POST(request: NextRequest) {
     : null;
 
   /**
-   * Blue status hands the claim to whoever owns the practice relationship:
-   * its primary PM, else whoever uploaded the batch, else an owner.
+   * The claim goes to whoever owns the practice relationship — its primary PM,
+   * else whoever uploaded the batch, else an owner — in two cases: a blue
+   * status, which escalates automatically, and the biller ticking "reassign to
+   * practice PM", which is the same handover made deliberately at any status.
    */
   const goesBlue = input.statusCategoryChangedTo === StatusCategory.BLUE;
+  const handOver = goesBlue || input.reassignToPm === true;
 
-  const escalation = goesBlue
+  const escalation = handOver
     ? await resolveEscalationTarget({
         practiceId: claim.batch.practiceId,
         batchOwnerId: claim.batch.uploadedById,
@@ -98,7 +101,7 @@ export async function POST(request: NextRequest) {
   // than being orphaned.
   const nextAssigneeId = escalation?.userId ?? claim.assignedToId;
   const reassigned =
-    goesBlue &&
+    handOver &&
     nextAssigneeId !== null &&
     claim.assignedToId !== nextAssigneeId;
 
@@ -125,7 +128,7 @@ export async function POST(request: NextRequest) {
         lastWorkedAt: new Date(),
         lastWorkedById: session!.user.id,
         ...(followUpDate ? { followUpDate } : {}),
-        ...(goesBlue && escalation?.userId
+        ...(handOver && escalation?.userId
           ? { assignedToId: escalation.userId }
           : {}),
       },

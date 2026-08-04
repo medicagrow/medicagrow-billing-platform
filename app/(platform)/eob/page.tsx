@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { EobEntriesClient } from "@/components/eob/EobEntriesClient";
 import { LogEobModal } from "@/components/eob/LogEobModal";
@@ -16,31 +17,47 @@ import { requireUser } from "@/lib/session";
 export const metadata: Metadata = { title: "EOB/ERA" };
 export const dynamic = "force-dynamic";
 
+/**
+ * A figure over the entry list.
+ *
+ * Where the number names a subset of the list below, it links to that subset —
+ * the list reads the same query params, so the card and the table agree.
+ */
 function SummaryCard({
   label,
   value,
   tone,
+  href,
 }: {
   label: string;
   value: string;
   tone?: "red" | "amber";
+  href?: string;
 }) {
+  const toneClass =
+    tone === "red"
+      ? "text-red-700"
+      : tone === "amber"
+        ? "text-amber-700"
+        : "text-slate-900";
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
       <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
         {label}
       </p>
-      <p
-        className={`mt-1 text-2xl font-semibold tabular-nums ${
-          tone === "red"
-            ? "text-red-700"
-            : tone === "amber"
-              ? "text-amber-700"
-              : "text-slate-900"
-        }`}
-      >
-        {value}
-      </p>
+      {href ? (
+        <Link
+          href={href}
+          className={`mt-1 block text-2xl font-semibold tabular-nums underline-offset-4 hover:underline ${toneClass}`}
+        >
+          {value}
+        </Link>
+      ) : (
+        <p className={`mt-1 text-2xl font-semibold tabular-nums ${toneClass}`}>
+          {value}
+        </p>
+      )}
     </div>
   );
 }
@@ -48,7 +65,11 @@ function SummaryCard({
 export default async function EobHomePage({
   searchParams,
 }: {
-  searchParams: { practiceId?: string };
+  searchParams: {
+    practiceId?: string;
+    entryType?: string;
+    statusCategory?: string;
+  };
 }) {
   const user = await requireUser();
   const practiceIds = await accessiblePracticeIds(user);
@@ -197,11 +218,13 @@ export default async function EobHomePage({
           label="Unresolved denials"
           value={String(unresolvedDenials)}
           tone={unresolvedDenials > 0 ? "red" : undefined}
+          href="/eob?entryType=DENIAL&statusCategory=RED"
         />
         <SummaryCard
           label="Unresolved rejections"
           value={String(unresolvedRejections)}
           tone={unresolvedRejections > 0 ? "amber" : undefined}
+          href="/eob?entryType=REJECTION&statusCategory=RED"
         />
         <SummaryCard
           label="Amount at risk"
@@ -216,6 +239,8 @@ export default async function EobHomePage({
       <EobEntriesClient
         practices={practices}
         assignableUsers={assignableUsers}
+        initialEntryType={searchParams.entryType ?? ""}
+        initialStatusCategory={searchParams.statusCategory ?? ""}
       />
     </div>
   );

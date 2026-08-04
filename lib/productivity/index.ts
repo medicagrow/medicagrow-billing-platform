@@ -1,4 +1,4 @@
-import { Role } from "@/lib/generated/prisma/enums";
+import { Role, TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import {
   getArActivityDetail,
@@ -15,6 +15,7 @@ import {
   getTaskTypeProductivity,
 } from "@/lib/productivity/task-time";
 import {
+  practiceFilterFor,
   totalActivity,
   type ActivityDetailPage,
   type ActivityDetailProvider,
@@ -121,7 +122,27 @@ export async function getTeamProductivity(query: {
   const users = await prisma.user.findMany({
     where: {
       isActive: true,
-      role: { in: [Role.BILLER, Role.PROJECT_MANAGER] },
+      /**
+       * Billers and PMs are the standing roster. Anyone else who actually
+       * closed work in the window joins them — an Owner covering a queue was
+       * doing the work, and leaving them out made their completions vanish
+       * from the only report that counts completions.
+       */
+      OR: [
+        { role: { in: [Role.BILLER, Role.PROJECT_MANAGER] } },
+        {
+          tasksCompleted: {
+            some: {
+              status: TaskStatus.CLOSED,
+              completedAt: { gte: query.from, lte: query.to },
+              ...practiceFilterFor({
+                practiceId: query.practiceId,
+                practiceIds: query.selectedPracticeIds,
+              }),
+            },
+          },
+        },
+      ],
       // A PM scoped to specific practices should not see staff from others.
       ...(query.practiceIds === null
         ? {}

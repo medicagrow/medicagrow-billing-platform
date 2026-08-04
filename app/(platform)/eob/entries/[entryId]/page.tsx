@@ -7,10 +7,12 @@ import { EobNoteForm } from "@/components/eob/EobNoteForm";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/Card";
 import { canAccessPractice, canManageBatches } from "@/lib/ar-access";
+import { describeEscalationTarget } from "@/lib/escalation";
 import { formatDate, formatUSD } from "@/lib/format";
 import { EobEntryType, Role } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { formatDateIST, formatDateTimeIST } from "@/lib/timezone";
 
 export const metadata: Metadata = { title: "EOB Entry" };
 export const dynamic = "force-dynamic";
@@ -62,6 +64,13 @@ export default async function EobEntryPage({
   const isManager = canManageBatches(user);
   const isMine = entry.assignedToId === user.id;
   const canWork = isManager || isMine;
+
+  // Where a hand-over would land, resolved through the same chain the save
+  // uses — so the form's promise and the routing cannot disagree.
+  const escalation = await describeEscalationTarget({
+    practiceId: entry.batch.practiceId,
+    batchOwnerId: entry.batch.postedById,
+  });
 
   const assignees = isManager
     ? await prisma.user.findMany({
@@ -144,7 +153,7 @@ export default async function EobEntryPage({
               <Row label="Resolved">
                 {entry.resolvedAt ? (
                   <>
-                    {formatDate(entry.resolvedAt)}
+                    {formatDateIST(entry.resolvedAt)}
                     <span className="block text-xs text-slate-400">
                       {entry.resolvedBy?.name}
                     </span>
@@ -208,10 +217,7 @@ export default async function EobEntryPage({
                       </p>
                       <p className="mt-2 text-[11px] text-slate-400">
                         {note.workedBy.name} ·{" "}
-                        {new Date(note.workedAt).toLocaleString("en-US", {
-                          dateStyle: "medium",
-                          timeStyle: "short",
-                        })}
+                        {formatDateTimeIST(note.workedAt)}
                       </p>
                     </li>
                   ))}
@@ -229,7 +235,8 @@ export default async function EobEntryPage({
               currentStatus={entry.statusLabel}
               assignees={assignees}
               canReassign={isManager}
-              projectManagerName={entry.batch.postedBy.name}
+              projectManagerName={escalation.name ?? entry.batch.postedBy.name}
+              hasPrimaryPm={escalation.hasPrimaryPm}
               disabled={!canWork}
               disabledReason="This entry is assigned to someone else."
             />

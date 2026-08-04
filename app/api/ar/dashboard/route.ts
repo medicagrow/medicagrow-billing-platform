@@ -4,7 +4,7 @@ import {
   Role,
   StatusCategory,
 } from "@/lib/generated/prisma/enums";
-import { requireRole } from "@/lib/api-helpers";
+import { requireAuth } from "@/lib/api-helpers";
 import { accessiblePracticeIds } from "@/lib/ar-access";
 import { insuranceAgingBreakdown } from "@/lib/ar-insurance-aging";
 import { arBillerActivity, arSummary, billerProgress } from "@/lib/ar-summary";
@@ -13,12 +13,21 @@ import { daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 
-/** GET /api/ar/dashboard — cross-practice summary for Owner / PM. */
+/**
+ * GET /api/ar/dashboard — cross-practice summary.
+ *
+ * Owners and PMs see the practices they can reach; a biller sees the same
+ * shape narrowed to the claims assigned to them, which is their scorecard
+ * rather than the practice's.
+ */
 export async function GET(request: NextRequest) {
   const session = await getSession();
 
-  const denied = requireRole(session, [Role.OWNER, Role.PROJECT_MANAGER]);
+  const denied = requireAuth(session);
   if (denied) return denied;
+
+  const isBiller = session!.user.role === Role.BILLER;
+  const claimScope = isBiller ? { assignedToId: session!.user.id } : {};
 
   const today = startOfTodayUtc();
   const practiceIds = await accessiblePracticeIds(session!.user);
@@ -65,31 +74,42 @@ export async function GET(request: NextRequest) {
     .map((practice) => practice.arBatches[0]?.id)
     .filter((id): id is string => Boolean(id));
 
-  const [byCategory, unassigned, overdue, agingRows] = await Promise.all([
-    prisma.arClaim.groupBy({
-      by: ["batchId", "statusCategory"],
-      where: { batchId: { in: openBatchIds } },
-      _count: { _all: true },
-    }),
-    prisma.arClaim.groupBy({
-      by: ["batchId"],
-      where: { batchId: { in: openBatchIds }, assignedToId: null },
-      _count: { _all: true },
-    }),
-    prisma.arClaim.groupBy({
-      by: ["batchId"],
-      where: {
-        batchId: { in: openBatchIds },
-        statusCategory: StatusCategory.RED,
-        followUpDate: { lt: today },
-      },
-      _count: { _all: true },
-    }),
-    prisma.arClaim.findMany({
-      where: { batchId: { in: openBatchIds } },
-      select: { agingDays: true, balance: true },
-    }),
-  ]);
+  const [byCategory, unassigned, overdue, agingRows, ownTotals] =
+    await Promise.all([
+      prisma.arClaim.groupBy({
+        by: ["batchId", "statusCategory"],
+        where: { batchId: { in: openBatchIds }, ...claimScope },
+        _count: { _all: true },
+      }),
+      prisma.arClaim.groupBy({
+        by: ["batchId"],
+        where: { batchId: { in: openBatchIds }, assignedToId: null },
+        _count: { _all: true },
+      }),
+      prisma.arClaim.groupBy({
+        by: ["batchId"],
+        where: {
+          batchId: { in: openBatchIds },
+          statusCategory: StatusCategory.RED,
+          followUpDate: { lt: today },
+          ...claimScope,
+        },
+        _count: { _all: true },
+      }),
+      prisma.arClaim.findMany({
+        where: { batchId: { in: openBatchIds }, ...claimScope },
+        select: { agingDays: true, balance: true },
+      }),
+      // A biller's batch totals are their own claims, not the batch's.
+      isBiller
+        ? prisma.arClaim.groupBy({
+            by: ["batchId"],
+            where: { batchId: { in: openBatchIds }, ...claimScope },
+            _count: { _all: true },
+            _sum: { balance: true },
+          })
+        : Promise.resolve([]),
+    ]);
 
   const countFor = (batchId: string, category: StatusCategory) =>
     byCategory.find(
@@ -123,7 +143,12 @@ export async function GET(request: NextRequest) {
     const greenCount = countFor(batch.id, StatusCategory.GREEN);
     const redCount = countFor(batch.id, StatusCategory.RED);
     const blueCount = countFor(batch.id, StatusCategory.BLUE);
-    const totalClaims = batch.totalClaims;
+
+    const own = ownTotals.find((row) => row.batchId === batch.id);
+    const totalClaims = isBiller ? (own?._count._all ?? 0) : batch.totalClaims;
+    const totalBalance = isBiller
+      ? (own?._sum.balance?.toString() ?? "0.00")
+      : batch.totalBalance.toString();
     const overdueCount =
       overdue.find((row) => row.batchId === batch.id)?._count._all ?? 0;
     const daysOpen = daysBetween(batch.uploadedAt, new Date());
@@ -142,7 +167,7 @@ export async function GET(request: NextRequest) {
       reportYear: batch.reportYear,
       daysOpen,
       totalClaims,
-      totalBalance: batch.totalBalance.toString(),
+      totalBalance,
       greenCount,
       redCount,
       blueCount,
@@ -155,9 +180,16 @@ export async function GET(request: NextRequest) {
     };
   });
 
+  const visibleRows = isBiller
+    ? rows.filter((row) => row.totalClaims > 0)
+    : rows;
+
   // Biller productivity — counted from the work-note audit trail, scoped to
   // the practices in view so a PM never sees another practice's work.
-  const activity = await arBillerActivity({ practiceIds, selectedPracticeId });
+  // The panel is about managing a team; a biller has none.
+  const activity = isBiller
+    ? []
+    : await arBillerActivity({ practiceIds, selectedPracticeId });
 
   const buildProductivity = (
     progress: Awaited<ReturnType<typeof billerProgress>>,
@@ -199,7 +231,8 @@ export async function GET(request: NextRequest) {
     };
   });
 
-  const totals = rows.reduce(
+  // A biller totals only the practices they hold claims in.
+  const totals = visibleRows.reduce(
     (running, row) => ({
       balance: running.balance + Number(row.totalBalance),
       red: running.red + row.redCount,
@@ -212,10 +245,11 @@ export async function GET(request: NextRequest) {
   const insuranceAging = await insuranceAgingBreakdown({
     practiceIds,
     selectedPracticeId,
+    ...claimScope,
   });
 
   const [summary, progressByBiller] = await Promise.all([
-    arSummary({ practiceIds, selectedPracticeId }),
+    arSummary({ practiceIds, selectedPracticeId, ...claimScope }),
     billerProgress({ practiceIds, selectedPracticeId }),
   ]);
 
@@ -225,9 +259,9 @@ export async function GET(request: NextRequest) {
       totalRedClaims: totals.red,
       totalOverdue: totals.overdue,
       practicesWithoutBatch: totals.noBatch,
-      practiceCount: rows.length,
+      practiceCount: visibleRows.length,
     },
-    practices: rows,
+    practices: visibleRows,
     productivity: buildProductivity(progressByBiller),
     overallProgress: {
       totalClaims: summary.totalClaims,

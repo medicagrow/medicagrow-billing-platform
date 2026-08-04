@@ -75,6 +75,7 @@ export function TeamProductivityTable({
         "Practices",
         ...activityColumns.map((column) => column.label),
         "Total Activity",
+        "Task Output",
         "Time Logged (minutes)",
         "Completion %",
       ],
@@ -84,6 +85,13 @@ export function TeamProductivityTable({
         entry.assignedPractices.join("; "),
         ...activityColumns.map((column) => countOf(entry, column.key)),
         totalFor(entry),
+        entry.taskTypeBreakdown
+          .map(
+            (type) =>
+              `${type.taskTypeName}: ${type.count > 0 ? type.count : type.taskCount}` +
+              (type.totalAmount === null ? "" : ` (${type.totalAmount})`),
+          )
+          .join("; "),
         entry.totalLoggedMinutes,
         completionOf(entry),
       ]),
@@ -121,6 +129,7 @@ export function TeamProductivityTable({
                 </th>
               ))}
               <th className="px-4 py-3 text-right">Total</th>
+              <th className="px-4 py-3">Task output</th>
               <th className="px-4 py-3 text-right">Time Logged</th>
               <th className="px-4 py-3">Completion</th>
             </tr>
@@ -202,6 +211,41 @@ export function TeamProductivityTable({
                   <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-900">
                     {total}
                   </td>
+
+                  {/*
+                    The top few types inline, so the closed-task output is
+                    readable without expanding every row. The full list, with
+                    time and links, is one click below.
+                  */}
+                  <td className="px-4 py-3 text-xs text-slate-600">
+                    {entry.taskTypeBreakdown.length === 0 ? (
+                      <span className="text-slate-300">—</span>
+                    ) : (
+                      <div className="space-y-0.5">
+                        {entry.taskTypeBreakdown.slice(0, 3).map((type) => (
+                          <div
+                            key={type.taskTypeId ?? "none"}
+                            title={
+                              type.totalAmount === null
+                                ? `${type.taskCount} closed`
+                                : `${type.taskCount} closed · ${formatUSD(type.totalAmount)}`
+                            }
+                            className="whitespace-nowrap"
+                          >
+                            {type.taskTypeName}{" "}
+                            <span className="font-medium text-slate-900 tabular-nums">
+                              {type.count > 0 ? type.count : type.taskCount}
+                            </span>
+                          </div>
+                        ))}
+                        {entry.taskTypeBreakdown.length > 3 ? (
+                          <div className="text-slate-400">
+                            +{entry.taskTypeBreakdown.length - 3} more
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-right tabular-nums">
                     {entry.totalLoggedMinutes === 0 ? (
                       <span className="text-slate-300">—</span>
@@ -228,7 +272,7 @@ export function TeamProductivityTable({
 
                 isOpen ? (
                   <tr key={`${entry.userId}-types`} className="bg-slate-50/70">
-                    <td colSpan={activityColumns.length + 6} className="px-4 py-3">
+                    <td colSpan={activityColumns.length + 7} className="px-4 py-3">
                       {entry.taskTypeBreakdown.length === 0 ? (
                         <p className="text-xs text-slate-500">
                           No tasks closed in this period.

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { StatusBadge } from "@/components/ar/StatusBadge";
 import type { StatusCategory } from "@/lib/generated/prisma/enums";
 import { formatDate, formatUSD } from "@/lib/format";
+import { formatDateTimeIST } from "@/lib/timezone";
 
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -102,7 +103,7 @@ export function PriorHistoryPanel({ records }: { records: PriorRecord[] }) {
                         </p>
                       ) : null}
                       <p className="mt-1 text-[10px] text-slate-400">
-                        {note.workedByName} · {formatDate(note.workedAt)}
+                        {note.workedByName} · {formatDateTimeIST(note.workedAt)}
                       </p>
                     </li>
                   ))}

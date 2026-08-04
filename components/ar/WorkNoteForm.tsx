@@ -19,9 +19,10 @@ import {
   OUTCOME_ORDER,
   PAYMENT_SCOPES,
   PAYMENT_TYPES,
+  needsOfficeFields,
+  needsWriteOffFields,
   STATUSES_BY_OUTCOME,
   URGENCY_OPTIONS,
-  WRITE_OFF_TYPES,
 } from "@/lib/ar-outcomes";
 import { statusLabelToCategory } from "@/lib/ar-status";
 import { OutcomeType } from "@/lib/generated/prisma/enums";
@@ -60,12 +61,16 @@ export function WorkNoteForm({
   claimId,
   claimNumber,
   projectManagerName,
+  hasPrimaryPm = false,
   disabled,
   disabledReason,
 }: {
   claimId: string;
   claimNumber: string | null;
+  /** Who the escalation chain resolves to right now — not always a PM. */
   projectManagerName: string;
+  /** False when the practice has no primary PM and the chain falls through. */
+  hasPrimaryPm?: boolean;
   disabled?: boolean;
   disabledReason?: string;
 }) {
@@ -82,6 +87,7 @@ export function WorkNoteForm({
   );
   const [additionalNotes, setAdditionalNotes] = useState("");
   const [followUpDate, setFollowUpDate] = useState("");
+  const [reassignToPm, setReassignToPm] = useState(false);
   const [denialSuggestions, setDenialSuggestions] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -151,10 +157,47 @@ export function WorkNoteForm({
 
   const goesBlue = statusLabelToCategory(statusLabel) === "BLUE";
 
+  // Both sets of fields are driven by the chosen status, not the outcome.
+  const showWriteOffFields = needsWriteOffFields(statusLabel);
+  const showOfficeFields = needsOfficeFields(statusLabel);
+
+  /**
+   * Fields that belong to a status the biller has moved away from are cleared,
+   * not just hidden — the note generator reads whatever is in `fields`, so a
+   * stale write-off amount would reappear in the saved text.
+   */
+  useEffect(() => {
+    setFields((current) => {
+      const next = { ...current };
+      let changed = false;
+
+      if (!showWriteOffFields) {
+        for (const key of ["writeOffAmount", "reason"] as const) {
+          if ((current[key] ?? "") !== "") {
+            next[key] = "";
+            changed = true;
+          }
+        }
+      }
+
+      if (!showOfficeFields) {
+        for (const key of ["whatIsNeeded", "urgency"] as const) {
+          if ((current[key] ?? "") !== "") {
+            next[key] = "";
+            changed = true;
+          }
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [showWriteOffFields, showOfficeFields]);
+
   function resetForm() {
     setFields({ claimNumber: claimNumber ?? "" });
     setAdditionalNotes("");
     setFollowUpDate("");
+    setReassignToPm(false);
     setError(null);
     outcomeRef.current?.focus();
   }
@@ -174,13 +217,6 @@ export function WorkNoteForm({
     }
     if (outcomeType === OutcomeType.DENIED && !fields.denialReason) {
       missing.push("Denial Reason");
-    }
-    if (outcomeType === OutcomeType.CHECK_WITH_OFFICE && !fields.whatIsNeeded) {
-      missing.push("What is needed");
-    }
-    if (outcomeType === OutcomeType.WRITE_OFF) {
-      if (!fields.writeOffAmount) missing.push("Write-off Amount");
-      if (!fields.reason) missing.push("Reason");
     }
 
     if (missing.length > 0) {
@@ -203,6 +239,7 @@ export function WorkNoteForm({
           followUpDateSet: followUpDate || undefined,
           denialReason:
             outcomeType === OutcomeType.DENIED ? fields.denialReason : undefined,
+          reassignToPm,
         }),
       });
 
@@ -284,11 +321,8 @@ export function WorkNoteForm({
             onChange={(value) => set("claimNumber", value)}
           />
         </Field>
-        {/* No claim on file, a write-off and an office question have no
-            received date to state. */}
-        {outcomeType === OutcomeType.NO_CLAIM_ON_FILE ||
-        outcomeType === OutcomeType.CHECK_WITH_OFFICE ||
-        outcomeType === OutcomeType.WRITE_OFF ? null : (
+        {/* No claim on file has no received date to state. */}
+        {outcomeType === OutcomeType.NO_CLAIM_ON_FILE ? null : (
           <Field
             label="Claim received date"
             htmlFor="claimReceivedDate"
@@ -606,94 +640,6 @@ export function WorkNoteForm({
         </div>
       ) : null}
 
-      {/* --------------------- CHECK WITH OFFICE ---------------------- */}
-      {outcomeType === OutcomeType.CHECK_WITH_OFFICE ? (
-        <div className="space-y-3">
-          <Field label="What is needed" htmlFor="whatIsNeeded">
-            <Textarea
-              id="whatIsNeeded"
-              value={fields.whatIsNeeded ?? ""}
-              onChange={(event) => set("whatIsNeeded", event.target.value)}
-              placeholder="What must the practice provide before this can move forward?"
-            />
-          </Field>
-          <Field
-            label="Needed by (optional)"
-            htmlFor="neededByDate"
-            hint="Gives the PM a date to chase the practice against."
-          >
-            <Input
-              id="neededByDate"
-              type="date"
-              value={fields.neededByDate ?? ""}
-              onChange={(event) => set("neededByDate", event.target.value)}
-            />
-          </Field>
-          <Field label="Urgency" htmlFor="urgency">
-            <Select
-              id="urgency"
-              value={fields.urgency ?? "Normal"}
-              onChange={(event) => set("urgency", event.target.value)}
-            >
-              {URGENCY_OPTIONS.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        </div>
-      ) : null}
-
-      {/* -------------------------- WRITE OFF ------------------------- */}
-      {outcomeType === OutcomeType.WRITE_OFF ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Write-off amount" htmlFor="writeOffAmount">
-            <DecimalInput
-              id="writeOffAmount"
-              value={fields.writeOffAmount ?? ""}
-              onChange={(value) => set("writeOffAmount", value)}
-            />
-          </Field>
-          <Field label="Reason" htmlFor="reason">
-            <Input
-              id="reason"
-              value={fields.reason ?? ""}
-              onChange={(event) => set("reason", event.target.value)}
-            />
-          </Field>
-          <Field
-            label="Write-off type"
-            htmlFor="writeOffType"
-            hint="Separates preventable loss (timely filing) from contractual adjustments."
-          >
-            <Select
-              id="writeOffType"
-              value={fields.writeOffType ?? ""}
-              onChange={(event) => set("writeOffType", event.target.value)}
-            >
-              <option value="">Select…</option>
-              {WRITE_OFF_TYPES.map((type) => (
-                <option key={type} value={type}>
-                  {type}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field
-            label="Approved by (optional)"
-            htmlFor="approvedBy"
-            hint="Write-offs discard revenue — record who authorised it."
-          >
-            <Input
-              id="approvedBy"
-              value={fields.approvedBy ?? ""}
-              onChange={(event) => set("approvedBy", event.target.value)}
-            />
-          </Field>
-        </div>
-      ) : null}
-
       {/* ------------------------ COMMON FIELDS ----------------------- */}
       <div className="space-y-3 border-t border-slate-100 pt-4">
         {/* Sits above the contact fields because it controls them. */}
@@ -787,6 +733,56 @@ export function WorkNoteForm({
           </Field>
         </div>
 
+        {/*
+          Write Off and Check with Office used to be outcome types with forms
+          of their own. They are endings any outcome can reach, so their fields
+          hang off the status that needs them instead.
+        */}
+        {showWriteOffFields ? (
+          <div className="grid gap-3 rounded-lg bg-slate-50 p-3 ring-1 ring-inset ring-slate-200 sm:grid-cols-2">
+            <Field label="Write-off amount (optional)" htmlFor="writeOffAmount">
+              <DecimalInput
+                id="writeOffAmount"
+                value={fields.writeOffAmount ?? ""}
+                onChange={(value) => set("writeOffAmount", value)}
+              />
+            </Field>
+            <Field label="Write-off reason (optional)" htmlFor="reason">
+              <Input
+                id="reason"
+                value={fields.reason ?? ""}
+                onChange={(event) => set("reason", event.target.value)}
+              />
+            </Field>
+          </div>
+        ) : null}
+
+        {showOfficeFields ? (
+          <div className="space-y-3 rounded-lg bg-slate-50 p-3 ring-1 ring-inset ring-slate-200">
+            <Field label="What is needed (optional)" htmlFor="whatIsNeeded">
+              <Textarea
+                id="whatIsNeeded"
+                value={fields.whatIsNeeded ?? ""}
+                onChange={(event) => set("whatIsNeeded", event.target.value)}
+                placeholder="What must the practice provide before this can move forward?"
+              />
+            </Field>
+            <Field label="Urgency" htmlFor="urgency">
+              <Select
+                id="urgency"
+                value={fields.urgency ?? "Normal"}
+                onChange={(event) => set("urgency", event.target.value)}
+              >
+                {URGENCY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+        ) : null}
+
         {goesBlue ? (
           <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800 ring-1 ring-inset ring-sky-200">
             This claim will be reassigned to {projectManagerName} for
@@ -804,6 +800,36 @@ export function WorkNoteForm({
           {preview}
           {additionalNotes.trim() ? `\n\n${additionalNotes.trim()}` : ""}
         </pre>
+      </div>
+
+      {/*
+        Hand-over on demand. Blue statuses already do this by themselves, so
+        the checkbox is redundant there and says so rather than pretending to
+        be the thing that caused it.
+      */}
+      <div className="rounded-lg border border-slate-200 px-3 py-2.5">
+        <label className="flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={reassignToPm || goesBlue}
+            disabled={goesBlue || submitting}
+            onChange={(event) => setReassignToPm(event.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-600"
+          />
+          <span>Reassign to Practice PM after saving</span>
+        </label>
+
+        {goesBlue ? (
+          <p className="mt-1 pl-6 text-xs text-slate-500">
+            This status already reassigns the claim.
+          </p>
+        ) : reassignToPm ? (
+          <p className="mt-1 pl-6 text-xs text-slate-600">
+            {hasPrimaryPm
+              ? `Claim will be reassigned to ${projectManagerName} upon saving`
+              : `No PM assigned to this practice — reassign will go to ${projectManagerName}`}
+          </p>
+        ) : null}
       </div>
 
       {error ? <FieldError>{error}</FieldError> : null}

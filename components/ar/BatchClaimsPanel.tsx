@@ -16,13 +16,14 @@ import { AGING_BUCKETS } from "@/lib/ar-aging";
 import type { ClaimDto } from "@/lib/ar-serialize";
 import { formatDate, formatUSD } from "@/lib/format";
 
-type TabKey = "all" | "unassigned" | "blue" | "overdue";
+export type TabKey = "all" | "unassigned" | "red" | "blue" | "overdue";
 
 type SortKey = "aging" | "patientName" | "provider" | "balance" | "status";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "all", label: "All Claims" },
   { key: "unassigned", label: "Unassigned" },
+  { key: "red", label: "Red Claims" },
   { key: "blue", label: "Blue Claims" },
   { key: "overdue", label: "Overdue Follow-ups" },
 ];
@@ -39,17 +40,20 @@ export function BatchClaimsPanel({
   batchClosed,
   assignees,
   insuranceOptions,
+  initialTab = "all",
 }: {
   batchId: string;
   canAssign: boolean;
   batchClosed: boolean;
   assignees: Assignee[];
   insuranceOptions: string[];
+  /** Seeded from the URL, so a dashboard count lands on what it counted. */
+  initialTab?: TabKey;
 }) {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [tab, setTab] = useState<TabKey>("all");
+  const [tab, setTab] = useState<TabKey>(initialTab);
   const [claims, setClaims] = useState<ClaimDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -73,6 +77,7 @@ export function BatchClaimsPanel({
     });
 
     if (tab === "unassigned") params.set("unassigned", "true");
+    if (tab === "red") params.set("statusCategory", "RED");
     if (tab === "blue") params.set("statusCategory", "BLUE");
     if (tab === "overdue") params.set("overdue", "true");
     // Empty means "no filter", so the params are omitted entirely.

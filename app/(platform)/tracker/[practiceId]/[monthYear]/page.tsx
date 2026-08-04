@@ -7,12 +7,12 @@ import {
   type TrackerFormValues,
 } from "@/components/tracker/TrackerEntryForm";
 import { canAccessPractice, canManageBatches } from "@/lib/ar-access";
-import { formatDate } from "@/lib/format";
 import { LockStatus, Role } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/session";
+import { requireNonBiller } from "@/lib/session";
 import { getTrackerConfig } from "@/lib/tracker/config";
 import { monthYearToDate } from "@/lib/validations/tracker";
+import { formatDateTimeIST } from "@/lib/timezone";
 
 export const metadata: Metadata = { title: "Tracker Entry" };
 export const dynamic = "force-dynamic";
@@ -31,7 +31,7 @@ export default async function TrackerEntryPage({
 }: {
   params: { practiceId: string; monthYear: string };
 }) {
-  const user = await requireUser();
+  const user = await requireNonBiller();
 
   if (!canManageBatches(user)) notFound();
   if (!/^\d{4}-\d{2}$/.test(params.monthYear)) notFound();
@@ -120,7 +120,7 @@ export default async function TrackerEntryPage({
         initialValues={initialValues}
         entryId={entry?.id ?? null}
         locked={entry?.lockStatus === LockStatus.LOCKED}
-        lockedAt={entry?.lockedAt ? formatDate(entry.lockedAt) : null}
+        lockedAt={entry?.lockedAt ? formatDateTimeIST(entry.lockedAt) : null}
         lockedByName={entry?.lockedBy?.name ?? null}
         canLock={user.role === Role.OWNER}
         canEdit={canManageBatches(user)}

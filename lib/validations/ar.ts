@@ -112,6 +112,11 @@ export const createWorkNoteSchema = z
     followUpDateSet: dateStringSchema.optional(),
     /** Denial reason is captured separately so the API can upsert it. */
     denialReason: z.string().trim().max(300).optional(),
+    /**
+     * Hands the claim to the practice's PM on save, at any status. Blue
+     * statuses do this automatically; this is the biller asking for it.
+     */
+    reassignToPm: z.boolean().optional(),
   })
   .refine(
     (data) => isStatusValidForOutcome(data.outcomeType, data.statusChangedTo),

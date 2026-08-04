@@ -105,7 +105,10 @@ export default async function PracticeDetailPage({
           taxonomy: provider.taxonomy,
           isActive: provider.isActive,
         }))}
-        canEdit={user.role === Role.OWNER}
+        // A PM maintains their own practices' details; only an owner decides
+        // who escalations route to.
+        canEdit={canManageBatches(user)}
+        canAssignPm={user.role === Role.OWNER}
       />
     </div>
   );

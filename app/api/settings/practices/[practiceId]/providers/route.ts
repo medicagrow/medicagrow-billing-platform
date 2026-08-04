@@ -7,6 +7,7 @@ import {
   zodErrorResponse,
 } from "@/lib/api-helpers";
 import { canAccessPractice } from "@/lib/ar-access";
+import { accessiblePracticeIds } from "@/lib/ar-access";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { practiceProviderSchema } from "@/lib/validations/settings";
@@ -44,15 +45,22 @@ export async function GET(
   });
 }
 
-/** POST — add a provider. Owner only. */
+/** POST — add a provider. Owner, or a PM on this practice. */
 export async function POST(
   request: NextRequest,
   { params }: { params: { practiceId: string } },
 ) {
   const session = await getSession();
 
-  const denied = requireRole(session, [Role.OWNER]);
+  const denied = requireRole(session, [Role.OWNER, Role.PROJECT_MANAGER]);
   if (denied) return denied;
+
+  // A PM manages the rosters of their own practices only.
+  const accessible = await accessiblePracticeIds(session!.user);
+
+  if (accessible !== null && !accessible.includes(params.practiceId)) {
+    return apiErrorResponse("Practice not found.", 404);
+  }
 
   const practice = await prisma.practice.findUnique({
     where: { id: params.practiceId },

@@ -233,6 +233,77 @@ export async function generateDueInstances(options?: {
 }
 
 /**
+ * Which task ids a delete covers.
+ *
+ *   this   — just the one named
+ *   future — it and every later occurrence of the same series
+ *   all    — the whole series: parent, children, history and all
+ *
+ * A task with no series returns itself whatever the scope, so the caller does
+ * not have to special-case the ordinary delete.
+ */
+export async function taskIdsForDeletion(
+  task: {
+    id: string;
+    isRecurring: boolean;
+    parentTaskId: string | null;
+    dueDate: Date | null;
+  },
+  scope: "this" | "future" | "all",
+): Promise<string[]> {
+  const seriesId = task.isRecurring ? task.id : task.parentTaskId;
+
+  if (!seriesId || scope === "this") return [task.id];
+
+  if (scope === "all") {
+    const children = await prisma.task.findMany({
+      where: { parentTaskId: seriesId },
+      select: { id: true },
+    });
+
+    return [seriesId, ...children.map((child) => child.id)];
+  }
+
+  // "future": from this occurrence onwards. A parent has no due date of its
+  // own, so deleting forward from it means every occurrence not yet past.
+  const from = task.dueDate ?? dayStart();
+
+  const later = await prisma.task.findMany({
+    where: { parentTaskId: seriesId, dueDate: { gte: from } },
+    select: { id: true },
+  });
+
+  return Array.from(new Set([task.id, ...later.map((row) => row.id)])).filter(
+    (id) => id !== seriesId || task.isRecurring,
+  );
+}
+
+/**
+ * Removes tasks and everything hanging off them.
+ *
+ * A hard delete, not the soft delete todos use: these rows are being removed
+ * because they should never have existed — a series generated too far ahead,
+ * or a task raised by mistake — so leaving tombstones for the productivity
+ * module to filter out would be worse than the deletion itself. Anything
+ * already worked keeps its history because the caller does not offer to
+ * delete it.
+ */
+export async function deleteTasks(taskIds: string[]): Promise<number> {
+  if (taskIds.length === 0) return 0;
+
+  await prisma.$transaction([
+    prisma.taskTimeEditRequest.deleteMany({
+      where: { timeLog: { taskId: { in: taskIds } } },
+    }),
+    prisma.taskTimeLog.deleteMany({ where: { taskId: { in: taskIds } } }),
+    prisma.taskNote.deleteMany({ where: { taskId: { in: taskIds } } }),
+    prisma.task.deleteMany({ where: { id: { in: taskIds } } }),
+  ]);
+
+  return taskIds.length;
+}
+
+/**
  * Closing the parent ends the series: every child still open is closed with
  * it, since they exist only to carry out the parent's schedule.
  */

@@ -87,6 +87,11 @@ export const createEobWorkNoteSchema = z
     statusChangedTo: eobStatusLabelSchema,
     assignedToChangedId: z.string().min(1).nullable().optional(),
     resolutionNote: optionalText(2000),
+    /**
+     * Hands the entry to the practice's PM on save, at any status. Blue
+     * statuses do this automatically; this is the biller asking for it.
+     */
+    reassignToPm: z.boolean().optional(),
   })
   .transform((data) => ({
     ...data,

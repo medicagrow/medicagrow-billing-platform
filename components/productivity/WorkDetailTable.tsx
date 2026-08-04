@@ -2,8 +2,8 @@
 
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/Card";
-import { formatDate } from "@/lib/format";
 import type { ActivityBreakdown } from "@/lib/productivity/types";
+import { formatDateTimeIST } from "@/lib/timezone";
 
 export interface WorkDetailRow {
   id: string;
@@ -110,7 +110,7 @@ export function WorkDetailTable({
                   </td>
                 ) : null}
                 <td className="whitespace-nowrap px-4 py-3 text-slate-600">
-                  {row.completedAt ? formatDate(row.completedAt) : "—"}
+                  {formatDateTimeIST(row.completedAt)}
                 </td>
               </tr>
             ))}

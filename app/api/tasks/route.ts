@@ -74,6 +74,12 @@ export async function GET(request: NextRequest) {
 
   const where = {
     ...(await taskVisibilityFilter(session!.user)),
+    /**
+     * A recurring parent is the schedule, not work. It carries no due date and
+     * cannot be completed, so listing it beside its own occurrences gives a
+     * row nobody can act on — and one that double-counts the series.
+     */
+    NOT: { isRecurring: true, parentTaskId: null },
     ...(filters.assignedToId ? { assignedToId: filters.assignedToId } : {}),
     ...(filters.createdById ? { createdById: filters.createdById } : {}),
     ...(filters.status ? { status: filters.status } : {}),
@@ -84,9 +90,10 @@ export async function GET(request: NextRequest) {
       ? { title: { contains: filters.search, mode: "insensitive" as const } }
       : {}),
     ...(filters.tag ? { tags: { has: filters.tag } } : {}),
-    // A recurring series is the parent plus everything it generated.
+    // "Recurring only" means the occurrences a series produced — the parent
+    // is excluded above, and it is the only thing `isRecurring` would add.
     ...(filters.recurringOnly === "true"
-      ? { OR: [{ isRecurring: true }, { parentTaskId: { not: null } }] }
+      ? { parentTaskId: { not: null } }
       : {}),
     ...(dateRange ? { dueDate: dateRange } : {}),
     ...(filters.overdue === "true"

@@ -3,16 +3,27 @@ import { Role, TaskStatus } from "@/lib/generated/prisma/enums";
 import {
   apiErrorResponse,
   requireAuth,
+  requireRole,
   zodErrorResponse,
 } from "@/lib/api-helpers";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
-import { canAssignTask, canEditTask } from "@/lib/task-access";
+import {
+  canAssignTask,
+  canEditTask,
+  taskVisibilityFilter,
+} from "@/lib/task-access";
 import { TASK_DETAIL_INCLUDE, toTaskDto } from "@/lib/task-serialize";
 import { formatMinutes } from "@/lib/task-timer-serialize";
-import { closeSeries, createNextInstance } from "@/lib/task/recurrence";
+import {
+  closeSeries,
+  createNextInstance,
+  deleteTasks,
+  generateFirstInstance,
+  taskIdsForDeletion,
+} from "@/lib/task/recurrence";
 import { dayStart } from "@/lib/todo/access";
-import { updateTaskSchema } from "@/lib/validations/task";
+import { deleteTaskSchema, updateTaskSchema } from "@/lib/validations/task";
 
 /** Human-readable status names for the automatic note. */
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -31,12 +42,19 @@ export async function GET(
   const denied = requireAuth(session);
   if (denied) return denied;
 
-  const task = await prisma.task.findUnique({
-    where: { id: params.taskId },
+  /**
+   * Reading follows the list's visibility rules, not the edit rules — a PM
+   * needs to open the series template behind an occurrence they oversee, and
+   * that template is rarely assigned to or created by them.
+   */
+  const task = await prisma.task.findFirst({
+    where: {
+      AND: [await taskVisibilityFilter(session!.user), { id: params.taskId }],
+    },
     include: TASK_DETAIL_INCLUDE,
   });
 
-  if (!task || !canEditTask(session!.user, task)) {
+  if (!task) {
     return apiErrorResponse("Task not found.", 404);
   }
 
@@ -77,7 +95,27 @@ export async function PATCH(
     },
   });
 
-  if (!existing || !canEditTask(session!.user, existing)) {
+  if (!existing) {
+    return apiErrorResponse("Task not found.", 404);
+  }
+
+  /**
+   * The assignee, the creator and Owners may edit. A PM may too, but only
+   * within their own practices — they manage the work without holding it, and
+   * requiring them to be the assignee would mean reassigning a task to
+   * themselves to correct its due date.
+   */
+  const editable =
+    canEditTask(session!.user, existing) ||
+    (session!.user.role === Role.PROJECT_MANAGER &&
+      (await prisma.task.findFirst({
+        where: {
+          AND: [await taskVisibilityFilter(session!.user), { id: existing.id }],
+        },
+        select: { id: true },
+      })) !== null);
+
+  if (!editable) {
     return apiErrorResponse("Task not found.", 404);
   }
 
@@ -130,10 +168,22 @@ export async function PATCH(
   if (input.recurringConfig !== undefined) {
     data.recurringConfig = input.recurringConfig ?? undefined;
   }
+
+  const becomingRecurring =
+    input.isRecurring === true && !existing.isRecurring;
+
   if (input.assignedToId !== undefined) data.assignedToId = input.assignedToId;
   if (input.dueDate !== undefined) {
     data.dueDate = input.dueDate ? dayStart(input.dueDate) : null;
   }
+
+  /**
+   * Turning recurrence on converts the task into the series template, and a
+   * template is not work: it drops its own due date, which now belongs to the
+   * occurrences it generates. Applied after the due-date field so a stale one
+   * still in the form cannot put it back.
+   */
+  if (becomingRecurring) data.dueDate = null;
   /**
    * The estimate is the yardstick efficiency is measured against, so a biller
    * cannot move it — that would let the person being measured set the target.
@@ -226,6 +276,13 @@ export async function PATCH(
   let nextInstanceId: string | null = null;
   let closedInstances = 0;
 
+  // A series that exists but has produced nothing looks broken, so the first
+  // occurrence is written now — exactly as creating a recurring task does.
+  if (becomingRecurring) {
+    const first = await generateFirstInstance(task);
+    nextInstanceId = first?.id ?? null;
+  }
+
   const justClosed =
     statusChanged && input.status === TaskStatus.CLOSED;
 
@@ -258,4 +315,64 @@ export async function PATCH(
     nextInstanceId,
     closedInstances,
   });
+}
+
+/**
+ * DELETE /api/tasks/[taskId] — remove a task, or part of a recurring series.
+ *
+ * Managers only. A biller closing work they did not need is a status change,
+ * not a deletion — removing the row would take its notes and logged time with
+ * it, and that is somebody's record of their day.
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { taskId: string } },
+) {
+  const session = await getSession();
+
+  const denied = requireRole(session, [Role.OWNER, Role.PROJECT_MANAGER]);
+  if (denied) return denied;
+
+  const body = deleteTaskSchema.safeParse(
+    await request.json().catch(() => ({})),
+  );
+
+  if (!body.success) {
+    return zodErrorResponse(body.error);
+  }
+
+  const task = await prisma.task.findUnique({
+    where: { id: params.taskId },
+    select: {
+      id: true,
+      isRecurring: true,
+      parentTaskId: true,
+      dueDate: true,
+      practiceId: true,
+      assignedToId: true,
+      createdById: true,
+    },
+  });
+
+  if (!task) {
+    return apiErrorResponse("Task not found.", 404);
+  }
+
+  // A PM may only delete what they can see, which is the practice's work —
+  // the same rule the list applies, asked of one row.
+  const visible = await prisma.task.findFirst({
+    where: {
+      AND: [await taskVisibilityFilter(session!.user), { id: task.id }],
+    },
+    select: { id: true },
+  });
+
+  if (!visible) {
+    return apiErrorResponse("Task not found.", 404);
+  }
+
+  const ids = await taskIdsForDeletion(task, body.data.scope);
+  const deleted = await deleteTasks(ids);
+
+  return NextResponse.json({ deleted });
 }

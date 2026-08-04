@@ -8,9 +8,9 @@ import { NumericInput } from "@/components/ui/inputs/NumericInput";
 import { PracticeField } from "@/components/ui/PracticeField";
 import { Select } from "@/components/ui/Select";
 import { useToast } from "@/components/ui/toast";
-import { formatDate } from "@/lib/format";
 import { TodoPriority, TodoStatus } from "@/lib/generated/prisma/enums";
 import { TODO_STATUS_LABELS, type TodoDto } from "@/lib/todo-serialize";
+import { formatDateTimeIST } from "@/lib/timezone";
 
 interface NoteRow {
   id: string;
@@ -414,7 +414,7 @@ export function TodoEditPanel({
                     <span className="font-medium text-slate-700">
                       {note.addedByName ?? "Unknown"}
                     </span>
-                    <span>{formatDate(note.addedAt)}</span>
+                    <span>{formatDateTimeIST(note.addedAt)}</span>
                   </div>
                   <p className="mt-1 whitespace-pre-wrap text-slate-700">
                     {note.note}

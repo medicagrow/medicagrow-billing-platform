@@ -34,10 +34,16 @@ export interface ArSummary {
 export async function arSummary({
   practiceIds,
   selectedPracticeId,
+  assignedToId,
 }: {
   /** null means "every practice" (Owner). */
   practiceIds: string[] | null;
   selectedPracticeId?: string;
+  /**
+   * Narrows every figure to one person's claims. A biller's dashboard is
+   * their own book of work, not the practice's.
+   */
+  assignedToId?: string;
 }): Promise<ArSummary> {
   const today = startOfTodayUtc();
 
@@ -63,10 +69,12 @@ export async function arSummary({
 
   const batchIds = batches.map((batch) => batch.id);
 
-  const [byCategory, overdueCount] = await Promise.all([
+  const claimScope = assignedToId ? { assignedToId } : {};
+
+  const [byCategory, overdueCount, ownTotals] = await Promise.all([
     prisma.arClaim.groupBy({
       by: ["batchId", "statusCategory"],
-      where: { batchId: { in: batchIds } },
+      where: { batchId: { in: batchIds }, ...claimScope },
       _count: { _all: true },
     }),
     prisma.arClaim.count({
@@ -74,8 +82,19 @@ export async function arSummary({
         batchId: { in: batchIds },
         statusCategory: StatusCategory.RED,
         followUpDate: { lt: today },
+        ...claimScope,
       },
     }),
+    // A batch's own totals count claims that were never this biller's, so
+    // their per-batch totals are recomputed from the claims they hold.
+    assignedToId
+      ? prisma.arClaim.groupBy({
+          by: ["batchId"],
+          where: { batchId: { in: batchIds }, ...claimScope },
+          _count: { _all: true },
+          _sum: { balance: true },
+        })
+      : Promise.resolve([]),
   ]);
 
   const countFor = (batchId: string, category: StatusCategory) =>
@@ -91,8 +110,16 @@ export async function arSummary({
   const practices: PracticeSummaryRow[] = batches.map((batch) => {
     const greenCount = countFor(batch.id, StatusCategory.GREEN);
 
-    totalCents += toCents(batch.totalBalance.toString());
-    totalClaims += batch.totalClaims;
+    const own = ownTotals.find((row) => row.batchId === batch.id);
+    const batchClaims = assignedToId
+      ? (own?._count._all ?? 0)
+      : batch.totalClaims;
+    const batchBalance = assignedToId
+      ? (own?._sum.balance?.toString() ?? "0.00")
+      : batch.totalBalance.toString();
+
+    totalCents += toCents(batchBalance);
+    totalClaims += batchClaims;
     totalGreenClaims += greenCount;
     totalRedClaims += countFor(batch.id, StatusCategory.RED);
 
@@ -102,12 +129,10 @@ export async function arSummary({
       batchId: batch.id,
       reportMonth: batch.reportMonth,
       reportYear: batch.reportYear,
-      totalClaims: batch.totalClaims,
+      totalClaims: batchClaims,
       greenCount,
       percentComplete:
-        batch.totalClaims === 0
-          ? 0
-          : Math.round((greenCount / batch.totalClaims) * 100),
+        batchClaims === 0 ? 0 : Math.round((greenCount / batchClaims) * 100),
       daysOpen: daysBetween(batch.uploadedAt, new Date()),
     };
   });

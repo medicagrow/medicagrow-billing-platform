@@ -4,6 +4,10 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TaskEditPanel } from "@/components/task/TaskEditPanel";
 import {
+  TaskDeleteModal,
+  TaskEditModal,
+} from "@/components/task/TaskEditModal";
+import {
   PRIORITY_VARIANT,
   RecurringBadge,
   STATUS_LABELS,
@@ -81,6 +85,8 @@ export function TaskListClient({
     assignedToId?: string;
     status?: string;
     practiceId?: string;
+    /** Seeded from the URL so a dashboard count lands on what it counted. */
+    overdue?: boolean;
   };
 }) {
   const router = useRouter();
@@ -91,6 +97,8 @@ export function TaskListClient({
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<TaskDto | null>(null);
+  const [deletingTask, setDeletingTask] = useState<TaskDto | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState("");
   const [editingEstimateId, setEditingEstimateId] = useState<string | null>(
@@ -99,6 +107,7 @@ export function TaskListClient({
   const [estimateDraft, setEstimateDraft] = useState("");
 
   const [status, setStatus] = useState(initial.status ?? "");
+  const [overdueOnly, setOverdueOnly] = useState(initial.overdue ?? false);
   const [priority, setPriority] = useState("");
   const [practiceId, setPracticeId] = useState(initial.practiceId ?? "");
   const [assignedToId, setAssignedToId] = useState(initial.assignedToId ?? "");
@@ -132,9 +141,11 @@ export function TaskListClient({
     if (search) params.set("search", search);
     if (from) params.set("from", from);
     if (to) params.set("to", to);
+    if (overdueOnly) params.set("overdue", "true");
 
     return params.toString();
   }, [
+    overdueOnly,
     page,
     sortKey,
     ascending,
@@ -474,6 +485,19 @@ export function TaskListClient({
           Recurring only
         </label>
 
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={overdueOnly}
+            onChange={(event) => {
+              setOverdueOnly(event.target.checked);
+              setPage(1);
+            }}
+            className="h-4 w-4 rounded border-slate-300"
+          />
+          Overdue only
+        </label>
+
         <div className="ml-auto">
           <Button variant="secondary" onClick={exportCsv} disabled={loading}>
             Export CSV
@@ -720,17 +744,45 @@ export function TaskListClient({
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedId((current) =>
-                              current === task.id ? null : task.id,
-                            )
-                          }
-                          className="text-sm font-medium text-brand-700 hover:text-brand-800"
-                        >
-                          {expandedId === task.id ? "Close" : "Edit"}
-                        </button>
+                        <div className="flex items-center justify-end gap-3">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedId((current) =>
+                                current === task.id ? null : task.id,
+                              )
+                            }
+                            className="text-sm font-medium text-brand-700 hover:text-brand-800"
+                          >
+                            {expandedId === task.id ? "Close" : "Work"}
+                          </button>
+
+                          {/*
+                            Managers only: these reach fields the person
+                            holding the task does not own, and a delete takes
+                            its notes and logged time with it.
+                          */}
+                          {canBulkEdit ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setEditingTask(task)}
+                                className="text-sm font-medium text-slate-600 hover:text-slate-900"
+                              >
+                                {task.isRecurring || task.parentTaskId
+                                  ? "Edit series"
+                                  : "Edit"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setDeletingTask(task)}
+                                className="text-sm font-medium text-red-600 hover:text-red-700"
+                              >
+                                Delete
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
 
@@ -782,6 +834,25 @@ export function TaskListClient({
           </div>
         </div>
       )}
+
+      {editingTask ? (
+        <TaskEditModal
+          task={editingTask}
+          practices={practices}
+          assignableUsers={assignableUsers}
+          taskTypes={taskTypes}
+          onClose={() => setEditingTask(null)}
+          onSaved={load}
+        />
+      ) : null}
+
+      {deletingTask ? (
+        <TaskDeleteModal
+          task={deletingTask}
+          onClose={() => setDeletingTask(null)}
+          onDeleted={load}
+        />
+      ) : null}
     </div>
   );
 }

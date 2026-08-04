@@ -6,18 +6,14 @@ import { Button } from "@/components/ui/Button";
 import { FieldError, Input, Label } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/ui/toast";
-import { formatDate } from "@/lib/format";
 import type { TaskDto } from "@/lib/task-serialize";
 import { formatMinutes, type TaskTimeLogDto } from "@/lib/task-timer-serialize";
+import { formatDateIST, formatTimeIST } from "@/lib/timezone";
 
 /** 48 hours, matching the server's edit window. */
 const EDIT_WINDOW_MS = 48 * 3_600_000;
 
-const clock = (iso: string) =>
-  new Date(iso).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+const clock = (iso: string) => formatTimeIST(iso);
 
 /** "1h 23m 45s" — the running clock, which needs seconds. */
 function elapsedLabel(fromIso: string, now: number): string {
@@ -196,7 +192,7 @@ export function TaskTimerPanel({
                 return (
                   <tr key={log.id}>
                     <td className="py-1.5 text-slate-600">
-                      {formatDate(log.startedAt)}
+                      {formatDateIST(log.startedAt)}
                     </td>
                     <td className="py-1.5 text-slate-600">
                       {clock(log.startedAt)} →{" "}

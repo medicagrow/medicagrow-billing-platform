@@ -11,7 +11,7 @@ import { FieldError, Input, Label } from "@/components/ui/Input";
 import { NumericInput } from "@/components/ui/inputs/NumericInput";
 import { Select } from "@/components/ui/Select";
 import { useToast } from "@/components/ui/toast";
-import { formatDate, formatUSD } from "@/lib/format";
+import { formatUSD } from "@/lib/format";
 import { formatMinutes } from "@/lib/task-timer-serialize";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
 import {
@@ -20,6 +20,7 @@ import {
 } from "@/lib/task/productivity-config";
 import { describeRecurrence } from "@/lib/task/recurrence-config";
 import type { TaskDto, TaskNoteDto } from "@/lib/task-serialize";
+import { formatDateTimeIST } from "@/lib/timezone";
 
 /**
  * Inline expanded view of one task.
@@ -466,7 +467,7 @@ export function TaskEditPanel({
                     <span className="font-medium text-slate-700">
                       {note.addedByName ?? "Unknown"}
                     </span>
-                    <span>{formatDate(note.addedAt)}</span>
+                    <span>{formatDateTimeIST(note.addedAt)}</span>
                     {note.statusChangedTo ? (
                       <Badge variant="neutral">
                         {STATUS_LABELS[note.statusChangedTo]}

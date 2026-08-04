@@ -62,3 +62,40 @@ export async function resolveEscalationTarget({
     ? { userId: owner.id, reason: "platform_owner" }
     : { userId: null, reason: "unresolved" };
 }
+
+export interface EscalationPreview {
+  /** Who the record would go to right now, by name. */
+  name: string | null;
+  reason: EscalationReason;
+  /** Whether the practice has a live primary PM to route to. */
+  hasPrimaryPm: boolean;
+}
+
+/**
+ * The same chain, resolved to a name so a form can say where the record is
+ * about to go before it goes there.
+ *
+ * Resolving it here rather than showing the batch uploader keeps the promise
+ * on screen and the routing on save from disagreeing.
+ */
+export async function describeEscalationTarget(input: {
+  practiceId: string | null | undefined;
+  batchOwnerId: string | null | undefined;
+}): Promise<EscalationPreview> {
+  const target = await resolveEscalationTarget(input);
+
+  if (!target.userId) {
+    return { name: null, reason: target.reason, hasPrimaryPm: false };
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: target.userId },
+    select: { name: true },
+  });
+
+  return {
+    name: user?.name ?? null,
+    reason: target.reason,
+    hasPrimaryPm: target.reason === "practice_primary_pm",
+  };
+}

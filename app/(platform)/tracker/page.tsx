@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { TrackerTable, type TrackerRow } from "@/components/tracker/TrackerTable";
 import { accessiblePracticeIds, canManageBatches } from "@/lib/ar-access";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/session";
+import { requireNonBiller } from "@/lib/session";
 import { monthYearToDate } from "@/lib/validations/tracker";
 
 export const metadata: Metadata = { title: "Tracker" };
@@ -20,7 +20,7 @@ export default async function TrackerHomePage({
 }: {
   searchParams: { monthYear?: string; practiceId?: string };
 }) {
-  const user = await requireUser();
+  const user = await requireNonBiller();
 
   if (!canManageBatches(user)) notFound();
 

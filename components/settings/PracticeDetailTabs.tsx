@@ -93,12 +93,15 @@ export function PracticeDetailTabs({
   providers: initialProviders,
   projectManagers,
   canEdit,
+  canAssignPm = false,
 }: {
   practice: PracticeDetail;
   providers: ProviderRow[];
   /** Only project managers may own a practice's escalations. */
   projectManagers: PmOption[];
   canEdit: boolean;
+  /** Owners only: choosing who escalations route to. */
+  canAssignPm?: boolean;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -188,7 +191,7 @@ export function PracticeDetailTabs({
               name: form.name,
               ehrSource: form.ehrSource,
               isActive: form.isActive,
-              primaryPmId: form.primaryPmId,
+              ...(canAssignPm ? { primaryPmId: form.primaryPmId } : {}),
               taxId: form.taxId,
               npi: form.npi,
               taxonomy: form.taxonomy,
@@ -228,24 +231,41 @@ export function PracticeDetailTabs({
               </Select>
             </Field>
 
+            {/*
+              Who owns the practice relationship decides where escalations
+              land, so it stays an Owner's call — a PM sees it but reads it.
+            */}
             <Field
               label="Primary Project Manager"
               htmlFor="primaryPmId"
-              hint="This PM receives all escalated claims and EOB entries for this practice."
+              hint={
+                canAssignPm
+                  ? "This PM receives all escalated claims and EOB entries for this practice."
+                  : "Set by an owner. This PM receives all escalated claims and EOB entries for this practice."
+              }
             >
-              <Select
-                id="primaryPmId"
-                value={form.primaryPmId}
-                onChange={(event) => set("primaryPmId", event.target.value)}
-                disabled={!canEdit}
-              >
-                <option value="">Not assigned</option>
-                {projectManagers.map((pm) => (
-                  <option key={pm.id} value={pm.id}>
-                    {pm.name}
-                  </option>
-                ))}
-              </Select>
+              {canAssignPm ? (
+                <Select
+                  id="primaryPmId"
+                  value={form.primaryPmId}
+                  onChange={(event) => set("primaryPmId", event.target.value)}
+                  disabled={!canEdit}
+                >
+                  <option value="">Not assigned</option>
+                  {projectManagers.map((pm) => (
+                    <option key={pm.id} value={pm.id}>
+                      {pm.name}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <p id="primaryPmId" className="py-2 text-sm text-slate-700">
+                  {projectManagers.find((pm) => pm.id === form.primaryPmId)
+                    ?.name ?? (
+                    <span className="text-slate-400">Not assigned</span>
+                  )}
+                </p>
+              )}
             </Field>
 
             <Field label="Tax ID (EIN)" htmlFor="taxId" hint="Format XX-XXXXXXX">

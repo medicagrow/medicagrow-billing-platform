@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { AddClaimModal } from "@/components/ar/AddClaimModal";
-import { BatchClaimsPanel } from "@/components/ar/BatchClaimsPanel";
+import {
+  BatchClaimsPanel,
+  type TabKey,
+} from "@/components/ar/BatchClaimsPanel";
 import { CloseBatchButton } from "@/components/ar/CloseBatchButton";
 import { CategoryPills } from "@/components/ar/StatusBadge";
 import { TargetDateEditor } from "@/components/ar/TargetDateEditor";
@@ -14,6 +17,7 @@ import { formatDate, formatUSD } from "@/lib/format";
 import { BatchStatus, Role } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { formatDateIST } from "@/lib/timezone";
 
 export const metadata: Metadata = { title: "Batch Detail" };
 export const dynamic = "force-dynamic";
@@ -54,10 +58,22 @@ function Stat({
 
 export default async function BatchDetailPage({
   params,
+  searchParams,
 }: {
   params: { batchId: string };
+  /** A count on a dashboard links in here already filtered. */
+  searchParams: { statusCategory?: string; overdue?: string };
 }) {
   const user = await requireUser();
+
+  const initialTab: TabKey =
+    searchParams.overdue === "true"
+      ? "overdue"
+      : searchParams.statusCategory === "RED"
+        ? "red"
+        : searchParams.statusCategory === "BLUE"
+          ? "blue"
+          : "all";
 
   if (!(await canAccessBatch(user, params.batchId))) {
     notFound();
@@ -117,7 +133,7 @@ export default async function BatchDetailPage({
           </div>
           <p className="mt-1 text-sm text-slate-500">
             {MONTH_NAMES[batch.reportMonth - 1]} {batch.reportYear} · uploaded by{" "}
-            {batch.uploadedBy.name} on {formatDate(batch.uploadedAt)}
+            {batch.uploadedBy.name} on {formatDateIST(batch.uploadedAt)}
             {batch.insuranceName ? ` · ${batch.insuranceName}` : ""}
           </p>
         </div>
@@ -189,6 +205,7 @@ export default async function BatchDetailPage({
         batchClosed={closed}
         assignees={assignees}
         insuranceOptions={insurances.map((row) => row.insuranceName)}
+        initialTab={initialTab}
       />
     </div>
   );

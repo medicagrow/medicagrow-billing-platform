@@ -58,15 +58,18 @@ export async function POST(request: NextRequest) {
   }
 
   /**
-   * Blue hands the entry to whoever owns the practice relationship — its
-   * primary PM, else whoever posted the batch, else an owner. The same chain
-   * AR uses, from the same resolver.
+   * The entry goes to whoever owns the practice relationship — its primary PM,
+   * else whoever posted the batch, else an owner — on a blue status, which
+   * escalates automatically, or when the biller ticks "reassign to practice
+   * PM". The same chain AR uses, from the same resolver.
    */
   const goesBlue = input.statusCategoryChangedTo === StatusCategory.BLUE;
+  const handOver = goesBlue || input.reassignToPm === true;
+
   const explicitAssignee =
     input.assignedToChangedId === undefined ? null : input.assignedToChangedId;
 
-  const escalation = goesBlue
+  const escalation = handOver
     ? await resolveEscalationTarget({
         practiceId: entry.batch.practiceId,
         batchOwnerId: entry.batch.postedById,
@@ -74,8 +77,9 @@ export async function POST(request: NextRequest) {
     : null;
 
   // With nobody to escalate to, the entry keeps its current assignee rather
-  // than being orphaned.
-  const nextAssigneeId = goesBlue
+  // than being orphaned. A deliberate hand-over outranks a picked assignee:
+  // it is the more explicit of the two requests.
+  const nextAssigneeId = handOver
     ? (escalation?.userId ?? entry.assignedToId)
     : (explicitAssignee ?? entry.assignedToId);
 
@@ -117,7 +121,7 @@ export async function POST(request: NextRequest) {
 
   let reassignedToName: string | null = null;
 
-  if (goesBlue && assignmentChanged && nextAssigneeId) {
+  if (handOver && assignmentChanged && nextAssigneeId) {
     const pm = await prisma.user.findUnique({
       where: { id: nextAssigneeId },
       select: { name: true },

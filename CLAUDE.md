@@ -15,6 +15,15 @@ other medical billing companies.
   optional field built from a transform chain must end in `.optional()`, or
   partial payloads fail validation. This has bitten identifiers, EOB, todo and
   tracker schemas — check it first when a valid-looking request 400s.
+- **All timestamps display in IST (Asia/Kolkata).** Use `formatDateTimeIST()`
+  / `formatDateIST()` / `formatTimeIST()` from
+  [lib/timezone.ts](lib/timezone.ts) — never `Date.toLocaleString()` without an
+  explicit timezone, which renders in the server's zone on a server component
+  and the viewer's on a client one. Storage stays UTC and does not change.
+  **Date-only fields are not timestamps**: due dates, dates of service and
+  report months are calendar dates at UTC midnight, so they keep going through
+  `formatDate()` in [lib/format.ts](lib/format.ts), which is deliberately UTC —
+  shifting them into IST would move some of them a day.
 - **Queue scoping:** every "my queue" enforces assigned-to-caller + RED +
   practice membership in one query. Owners skip the practice join since they
   hold no `UserPractice` rows.
@@ -117,6 +126,19 @@ other and must not be merged.
   points people actually hit: `GET /api/todos/today`,
   `GET /api/tasks/my-tasks`, and the dashboard fetch in
   `app/(platform)/page.tsx`. Add it to any new entry point that lists work.
+- **A recurring parent never appears in a task list.** `GET /api/tasks`
+  excludes `isRecurring && parentTaskId === null`; "Recurring only" narrows to
+  `parentTaskId != null` rather than adding an `OR`, which used to overwrite
+  the visibility filter's own `OR` and leak other practices' tasks.
+- **Editing a series** goes through `PATCH /api/tasks/[taskId]/series`, which
+  always updates the parent — leaving the template stale would mean the next
+  occurrence undoes the correction — and reaches the occurrences named by
+  `scope`: `future` (default), `this`, or `all`. `future` and `this` leave
+  closed work alone so completed history stays true to what was done.
+- **Deleting** is `DELETE /api/tasks/[taskId]` with the same scopes, Owner/PM
+  only, and is a **hard** delete — unlike todos. These rows are removed because
+  they should not exist, and a tombstone would have to be filtered out of every
+  list and report forever.
 - Task visibility ([lib/task-access.ts](lib/task-access.ts)): Billers see
   assigned-to-them plus created-by-them-and-visible; PMs add their practices'
   tasks; Owners see everything. Editing needs assignee, creator or Owner.
@@ -265,6 +287,19 @@ npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
   JSON parse error instead of a usable message.
 - Status labels are canonical in [lib/ar-status.ts](lib/ar-status.ts). Never
   pair a label with a category by hand — call `statusLabelToCategory()`.
+- **Write Off and Check with Office are no longer outcome types.** They were
+  never outcomes of a call — they were what you decided afterwards, so a denial
+  ending in a write-off had to be filed as one or the other and lost its denial
+  detail. Both remain in the `OutcomeType` enum, marked `@deprecated`, so
+  historical notes still read; `OUTCOME_ORDER` no longer offers them. Their
+  statuses now hang off PAID / DENIED / NO_CLAIM_ON_FILE / IN_PROCESS, and the
+  fields they need are shown against the **status** — `needsWriteOffFields()`
+  and `needsOfficeFields()` in [lib/ar-outcomes.ts](lib/ar-outcomes.ts).
+  Switching away from such a status **clears** those fields, since the note
+  generator reads whatever is in `fields`.
+- **"Reassign to Practice PM"** on the note forms runs the same escalation
+  chain a blue status does, at any status. Blue already reassigns, so the
+  checkbox is forced on and disabled there rather than implying it caused it.
 - Work-note text is built by `generateNote()` in
   [lib/ar-note-format.ts](lib/ar-note-format.ts), shared by the live preview
   and the API. `structuredFields` is a JSON column, so new note fields need no
@@ -330,7 +365,7 @@ built to take more modules without touching the routes or pages.
   practices they manage, and the detail page 404s for the others.
 
 ```bash
-npx tsx scripts/test-notes.ts      # generated note text for all 8 outcomes
+npx tsx scripts/test-notes.ts      # generated note text, retired outcomes
 npx tsx scripts/test-my-queue.ts   # queue scoping (needs the dev server)
 npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
 ```

@@ -5,19 +5,27 @@ import {
   requireRole,
   zodErrorResponse,
 } from "@/lib/api-helpers";
+import { accessiblePracticeIds } from "@/lib/ar-access";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { updatePracticeProviderSchema } from "@/lib/validations/settings";
 
-/** PATCH — update or deactivate a roster provider. Owner only. */
+/** PATCH — update or deactivate a roster provider. Owner, or a PM on this practice. */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: { practiceId: string; providerId: string } },
 ) {
   const session = await getSession();
 
-  const denied = requireRole(session, [Role.OWNER]);
+  const denied = requireRole(session, [Role.OWNER, Role.PROJECT_MANAGER]);
   if (denied) return denied;
+
+  // A PM manages the rosters of their own practices only.
+  const accessible = await accessiblePracticeIds(session!.user);
+
+  if (accessible !== null && !accessible.includes(params.practiceId)) {
+    return apiErrorResponse("Practice not found.", 404);
+  }
 
   const existing = await prisma.practiceProvider.findUnique({
     where: { id: params.providerId },

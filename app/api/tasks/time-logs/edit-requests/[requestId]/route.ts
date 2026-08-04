@@ -13,15 +13,12 @@ import {
   minutesBetween,
   recalculateTotalLoggedMinutes,
 } from "@/lib/task/timer";
+import { formatTimeIST } from "@/lib/timezone";
 import { reviewTimeEditRequestSchema } from "@/lib/validations/task-timer";
 
 /** "9:15 AM" — how a reviewer reads a time, not an ISO string. */
 function clockTime(value: Date): string {
-  return value.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "UTC",
-  });
+  return formatTimeIST(value);
 }
 
 /**

@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { FieldError, Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/toast";
-import { formatDate } from "@/lib/format";
 import { formatMinutes } from "@/lib/task-timer-serialize";
+import { formatDateIST, formatTimeIST } from "@/lib/timezone";
 
 interface EditRequestRow {
   id: string;
@@ -29,11 +29,7 @@ interface EditRequestRow {
   };
 }
 
-const clock = (iso: string) =>
-  new Date(iso).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+const clock = (iso: string) => formatTimeIST(iso);
 
 const range = (from: string, to: string | null) =>
   `${clock(from)} → ${to ? clock(to) : "—"}`;
@@ -190,7 +186,7 @@ export function TimeEditRequestsPanel() {
                   {request.reason}
                 </td>
                 <td className="whitespace-nowrap px-4 py-3 text-slate-500">
-                  {formatDate(request.createdAt)}
+                  {formatDateIST(request.createdAt)}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-col gap-2">

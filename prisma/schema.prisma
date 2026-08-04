@@ -50,7 +50,14 @@ enum OutcomeType {
   NO_CLAIM_ON_FILE
   PATIENT_RESPONSIBILITY
   IN_PROCESS
+  /// @deprecated Retired as an outcome — "Check with Office", "Inactive
+  /// Insurance" and "Provider OON" are now statuses reachable from PAID,
+  /// DENIED, NO_CLAIM_ON_FILE and IN_PROCESS. Kept so historical notes still
+  /// read; never offered in the picker. See lib/ar-outcomes.ts.
   CHECK_WITH_OFFICE
+  /// @deprecated Retired as an outcome — "Written Off" and "Need to Write Off"
+  /// are now statuses reachable from DENIED and NO_CLAIM_ON_FILE. Kept so
+  /// historical notes still read; never offered in the picker.
   WRITE_OFF
   OTHER
 }

@@ -28,31 +28,56 @@ const MONTH_NAMES = [
 
 const PRACTICE_ROWS = 5;
 
+/** One figure on a module card, with where its number leads. */
+interface ModuleStat {
+  label: string;
+  value: string;
+  tone?: "red" | "amber";
+  href?: string;
+}
+
+/**
+ * One figure on the dashboard.
+ *
+ * A number on a dashboard is a question — "which claims are those?" — so where
+ * an answer exists the figure links to the list that holds it. Cards with no
+ * meaningful destination stay plain rather than linking somewhere approximate.
+ */
 function Stat({
   label,
   value,
   tone,
+  href,
 }: {
   label: string;
   value: string;
   tone?: "red" | "amber";
+  href?: string;
 }) {
+  const toneClass =
+    tone === "red"
+      ? "text-red-700"
+      : tone === "amber"
+        ? "text-amber-700"
+        : "text-slate-900";
+
   return (
     <div className="rounded-lg bg-slate-50 px-3 py-2.5 ring-1 ring-inset ring-slate-100">
       <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
         {label}
       </p>
-      <p
-        className={`mt-0.5 text-xl font-semibold tabular-nums ${
-          tone === "red"
-            ? "text-red-700"
-            : tone === "amber"
-              ? "text-amber-700"
-              : "text-slate-900"
-        }`}
-      >
-        {value}
-      </p>
+      {href ? (
+        <Link
+          href={href}
+          className={`mt-0.5 block text-xl font-semibold tabular-nums underline-offset-4 hover:underline ${toneClass}`}
+        >
+          {value}
+        </Link>
+      ) : (
+        <p className={`mt-0.5 text-xl font-semibold tabular-nums ${toneClass}`}>
+          {value}
+        </p>
+      )}
     </div>
   );
 }
@@ -165,8 +190,16 @@ export default async function DashboardPage({
             10,
         ) / 10;
 
-  const arModule = moduleItems.find((module) => module.href === "/ar");
-  const otherModules = moduleItems.filter((module) => module.href !== "/ar");
+  // Module cards follow the same role rules the sidebar does — a biller has
+  // no Tracker or To Do, so they should not be offered one here either.
+  const visibleModules = moduleItems.filter(
+    (module) => !module.roles || module.roles.includes(user.role),
+  );
+
+  const arModule = visibleModules.find((module) => module.href === "/ar");
+  const otherModules = visibleModules.filter(
+    (module) => module.href !== "/ar",
+  );
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -232,15 +265,18 @@ export default async function DashboardPage({
                 <Stat
                   label="Outstanding balance"
                   value={formatUSD(summary.totalBalance)}
+                  href="/ar/dashboard"
                 />
                 <Stat
                   label="Red claims"
                   value={String(summary.totalRedClaims)}
+                  href="/ar/my-queue"
                 />
                 <Stat
                   label="Overdue follow-ups"
                   value={String(summary.overdueCount)}
                   tone={summary.overdueCount > 0 ? "red" : undefined}
+                  href="/ar/my-queue?overdue=true"
                 />
               </div>
 
@@ -330,7 +366,7 @@ export default async function DashboardPage({
         {otherModules.map((module) => {
           const IconComponent = module.icon;
 
-          const live =
+          const live: { href: string; stats: ModuleStat[] } | null =
             module.href === "/eob"
               ? {
                   href: "/eob",
@@ -339,6 +375,7 @@ export default async function DashboardPage({
                       label: "Unresolved",
                       value: String(eobUnresolved.length),
                       tone: eobUnresolved.length > 0 ? ("red" as const) : undefined,
+                      href: "/eob?statusCategory=RED",
                     },
                     {
                       label: "Amount at risk",
@@ -353,6 +390,7 @@ export default async function DashboardPage({
                       {
                         label: "Average health score",
                         value: averageHealth === null ? "—" : String(averageHealth),
+                        href: "/tracker",
                       },
                       {
                         label: "Practices scored",
@@ -364,11 +402,16 @@ export default async function DashboardPage({
                   ? {
                       href: "/tasks",
                       stats: [
-                        { label: "Open", value: String(tasksOpen) },
+                        {
+                          label: "Open",
+                          value: String(tasksOpen),
+                          href: "/tasks",
+                        },
                         {
                           label: "Overdue",
                           value: String(tasksOverdue),
                           tone: tasksOverdue > 0 ? ("red" as const) : undefined,
+                          href: "/tasks/list?overdue=true",
                         },
                       ],
                     }
@@ -376,11 +419,16 @@ export default async function DashboardPage({
                   ? {
                       href: "/todos",
                       stats: [
-                        { label: "Due today", value: String(todosDueToday) },
+                        {
+                          label: "Due today",
+                          value: String(todosDueToday),
+                          href: "/todos/list?dueToday=true",
+                        },
                         {
                           label: "Overdue",
                           value: String(todosOverdue),
                           tone: todosOverdue > 0 ? ("red" as const) : undefined,
+                          href: "/todos/list?overdue=true",
                         },
                       ],
                     }
@@ -419,6 +467,7 @@ export default async function DashboardPage({
                         label={stat.label}
                         value={stat.value}
                         tone={stat.tone}
+                        href={stat.href}
                       />
                     ))}
                   </div>

@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/Card";
@@ -74,7 +73,14 @@ export default async function ArDashboardPage({
 }) {
   const user = await requireUser();
 
-  if (!canManageBatches(user)) notFound();
+  /**
+   * A biller sees this page too, but as their own scorecard: every figure is
+   * narrowed to the claims assigned to them. A dashboard reporting the whole
+   * practice's balance to someone who works a slice of it is not information
+   * they can act on.
+   */
+  const isBiller = !canManageBatches(user);
+  const claimScope = isBiller ? { assignedToId: user.id } : {};
 
   const today = startOfTodayUtc();
   const practiceIds = await accessiblePracticeIds(user);
@@ -117,10 +123,10 @@ export default async function ArDashboardPage({
     .map((practice) => practice.arBatches[0]?.id)
     .filter((id): id is string => Boolean(id));
 
-  const [byCategory, overdueGroups, agingRows] = await Promise.all([
+  const [byCategory, overdueGroups, agingRows, ownTotals] = await Promise.all([
     prisma.arClaim.groupBy({
       by: ["batchId", "statusCategory"],
-      where: { batchId: { in: openBatchIds } },
+      where: { batchId: { in: openBatchIds }, ...claimScope },
       _count: { _all: true },
     }),
     prisma.arClaim.groupBy({
@@ -129,14 +135,28 @@ export default async function ArDashboardPage({
         batchId: { in: openBatchIds },
         statusCategory: StatusCategory.RED,
         followUpDate: { lt: today },
+        ...claimScope,
       },
       _count: { _all: true },
     }),
     prisma.arClaim.findMany({
-      where: { batchId: { in: openBatchIds } },
+      where: { batchId: { in: openBatchIds }, ...claimScope },
       select: { agingDays: true, balance: true },
     }),
+    // A biller's batch totals are their own claims, not the batch's — the
+    // batch columns count work that was never theirs.
+    isBiller
+      ? prisma.arClaim.groupBy({
+          by: ["batchId"],
+          where: { batchId: { in: openBatchIds }, ...claimScope },
+          _count: { _all: true },
+          _sum: { balance: true },
+        })
+      : Promise.resolve([]),
   ]);
+
+  const ownTotalFor = (batchId: string) =>
+    ownTotals.find((row) => row.batchId === batchId);
 
   const countFor = (batchId: string, category: StatusCategory) =>
     byCategory.find(
@@ -164,24 +184,32 @@ export default async function ArDashboardPage({
     const overdueCount =
       overdueGroups.find((row) => row.batchId === batch.id)?._count._all ?? 0;
     const daysOpen = daysBetween(batch.uploadedAt, new Date());
+
+    const own = ownTotalFor(batch.id);
+    const totalClaims = isBiller ? (own?._count._all ?? 0) : batch.totalClaims;
+    const totalBalance = isBiller
+      ? (own?._sum.balance?.toString() ?? "0.00")
+      : batch.totalBalance.toString();
+
     const percentOverdue =
-      batch.totalClaims === 0 ? 0 : (overdueCount / batch.totalClaims) * 100;
+      totalClaims === 0 ? 0 : (overdueCount / totalClaims) * 100;
 
     return {
       practice,
-      batch,
+      batch: { ...batch, totalClaims, totalBalance },
       greenCount,
       redCount: countFor(batch.id, StatusCategory.RED),
       blueCount: countFor(batch.id, StatusCategory.BLUE),
       overdueCount,
       percentGreen:
-        batch.totalClaims === 0
-          ? 0
-          : Math.round((greenCount / batch.totalClaims) * 100),
+        totalClaims === 0 ? 0 : Math.round((greenCount / totalClaims) * 100),
       daysOpen,
       needsAttention: daysOpen > 60 || percentOverdue > 20,
     };
-  });
+  })
+  // A biller's cross-practice table lists the practices they actually hold
+  // claims in, not every practice with an open batch.
+  .filter((row) => !isBiller || (row.batch?.totalClaims ?? 0) > 0);
 
   const totals = rows.reduce(
     (running, row) => ({
@@ -199,9 +227,11 @@ export default async function ArDashboardPage({
 
   // Same helper the API route uses, so the page and /api/ar/dashboard cannot
   // disagree — and both are scoped to the practices this user manages.
-  const productivity = (
-    await arBillerActivity({ practiceIds, selectedPracticeId })
-  ).sort((a, b) => b.thisMonth - a.thisMonth);
+  const productivity = isBiller
+    ? []
+    : (await arBillerActivity({ practiceIds, selectedPracticeId })).sort(
+        (a, b) => b.thisMonth - a.thisMonth,
+      );
 
   const productivityFrom = toDateParam(startOfMonth);
   const productivityTo = toDateParam(today);
@@ -223,10 +253,15 @@ export default async function ArDashboardPage({
   const insuranceAging = await insuranceAgingBreakdown({
     practiceIds,
     selectedPracticeId,
+    ...(isBiller ? { assignedToId: user.id } : {}),
   });
 
   const [summary, progressByBiller] = await Promise.all([
-    arSummary({ practiceIds, selectedPracticeId }),
+    arSummary({
+      practiceIds,
+      selectedPracticeId,
+      ...(isBiller ? { assignedToId: user.id } : {}),
+    }),
     billerProgress({ practiceIds, selectedPracticeId }),
   ]);
 
@@ -234,25 +269,36 @@ export default async function ArDashboardPage({
     <div className="mx-auto max-w-7xl">
       <PageHeader
         title="AR Dashboard"
-        description="Every practice, in one view."
+        description={
+          isBiller
+            ? "Your claims, across every practice you work."
+            : "Every practice, in one view."
+        }
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <SummaryCard
-          label="Total outstanding"
+          label={isBiller ? "My outstanding balance" : "Total outstanding"}
           value={formatUSD(totals.balance.toFixed(2))}
         />
-        <SummaryCard label="Red claims" value={String(totals.red)} />
         <SummaryCard
-          label="Overdue follow-ups"
+          label={isBiller ? "My red claims" : "Red claims"}
+          value={String(totals.red)}
+        />
+        <SummaryCard
+          label={isBiller ? "My overdue follow-ups" : "Overdue follow-ups"}
           value={String(totals.overdue)}
           tone={totals.overdue > 0 ? "red" : undefined}
         />
-        <SummaryCard
-          label="No active batch"
-          value={String(totals.noBatch)}
-          tone={totals.noBatch > 0 ? "amber" : undefined}
-        />
+        {isBiller ? (
+          <SummaryCard label="My claims" value={String(summary.totalClaims)} />
+        ) : (
+          <SummaryCard
+            label="No active batch"
+            value={String(totals.noBatch)}
+            tone={totals.noBatch > 0 ? "amber" : undefined}
+          />
+        )}
       </div>
 
       <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-card">
@@ -351,22 +397,41 @@ export default async function ArDashboardPage({
                     {row.batch ? `${row.percentGreen}%` : "—"}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-red-700">
-                    {row.batch ? row.redCount : "—"}
+                    {row.batch ? (
+                      <Link
+                        href={`/ar/batches/${row.batch.id}?statusCategory=RED`}
+                        className="underline-offset-4 hover:underline"
+                      >
+                        {row.redCount}
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-sky-700">
-                    {row.batch ? row.blueCount : "—"}
+                    {row.batch ? (
+                      <Link
+                        href={`/ar/batches/${row.batch.id}?statusCategory=BLUE`}
+                        className="underline-offset-4 hover:underline"
+                      >
+                        {row.blueCount}
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums">
                     {row.batch ? (
-                      <span
-                        className={
+                      <Link
+                        href={`/ar/batches/${row.batch.id}?overdue=true`}
+                        className={`underline-offset-4 hover:underline ${
                           row.overdueCount > 0
                             ? "font-medium text-red-700"
                             : "text-slate-600"
-                        }
+                        }`}
                       >
                         {row.overdueCount}
-                      </span>
+                      </Link>
                     ) : (
                       "—"
                     )}
@@ -431,7 +496,8 @@ export default async function ArDashboardPage({
         <InsuranceAgingTable data={insuranceAging} />
       </div>
 
-      {/* Biller productivity */}
+      {/* Biller productivity — a biller has no team, so it is not shown. */}
+      {isBiller ? null : (
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-card">
         <div className="border-b border-slate-100 px-4 py-3">
           <h3 className="text-sm font-semibold text-slate-900">
@@ -518,6 +584,7 @@ export default async function ArDashboardPage({
           </table>
         )}
       </div>
+      )}
     </div>
   );
 }

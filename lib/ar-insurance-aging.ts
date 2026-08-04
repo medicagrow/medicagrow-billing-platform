@@ -82,13 +82,17 @@ function sortByBalance(rows: InsuranceAgingRow[]): InsuranceAgingRow[] {
 export async function insuranceAgingBreakdown({
   practiceIds,
   selectedPracticeId,
+  assignedToId,
 }: {
   /** null means "all practices" (Owner). */
   practiceIds: string[] | null;
   selectedPracticeId?: string;
+  /** Narrows to one person's claims — a biller's view of their own book. */
+  assignedToId?: string;
 }): Promise<InsuranceAgingByCategory> {
   const claims = await prisma.arClaim.findMany({
     where: {
+      ...(assignedToId ? { assignedToId } : {}),
       batch: {
         status: BatchStatus.OPEN,
         ...(selectedPracticeId

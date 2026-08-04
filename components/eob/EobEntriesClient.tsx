@@ -38,9 +38,14 @@ const CATEGORY_LABELS: Record<StatusCategory, string> = {
 export function EobEntriesClient({
   practices,
   assignableUsers,
+  initialEntryType = "",
+  initialStatusCategory = "",
 }: {
   practices: { id: string; name: string }[];
   assignableUsers: { id: string; name: string }[];
+  /** Seeded from the URL so a summary card lands on what it counted. */
+  initialEntryType?: string;
+  initialStatusCategory?: string;
 }) {
   const router = useRouter();
 
@@ -53,8 +58,8 @@ export function EobEntriesClient({
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
 
-  const [entryType, setEntryType] = useState("");
-  const [statusCategory, setStatusCategory] = useState("");
+  const [entryType, setEntryType] = useState(initialEntryType);
+  const [statusCategory, setStatusCategory] = useState(initialStatusCategory);
   const [practiceId, setPracticeId] = useState("");
   const [payerName, setPayerName] = useState("");
   const [assignedToId, setAssignedToId] = useState("");

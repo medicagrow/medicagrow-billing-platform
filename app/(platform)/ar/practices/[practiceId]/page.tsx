@@ -10,6 +10,7 @@ import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
 import { formatDate, formatUSD } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { formatDateIST } from "@/lib/timezone";
 
 export const metadata: Metadata = { title: "Batch History" };
 export const dynamic = "force-dynamic";
@@ -137,7 +138,7 @@ export default async function PracticeBatchHistoryPage({
                       {batch.uploadedBy.name}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {formatDate(batch.uploadedAt)}
+                      {formatDateIST(batch.uploadedAt)}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       {batch.closedAt ? (

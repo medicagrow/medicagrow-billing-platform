@@ -20,6 +20,7 @@ import {
 import { resolveRange, toDateParam } from "@/lib/productivity/date-ranges";
 import { roleBadgeVariants, roleLabels } from "@/lib/roles";
 import { requireUser } from "@/lib/session";
+import { formatDateTimeIST } from "@/lib/timezone";
 
 export const metadata: Metadata = { title: "Biller Productivity" };
 export const dynamic = "force-dynamic";
@@ -208,10 +209,7 @@ export default async function BillerProductivityPage({
                 {recentActivity.map((entry) => (
                   <tr key={entry.id} className="hover:bg-slate-50">
                     <td className="whitespace-nowrap px-4 py-2.5 text-slate-600">
-                      {new Date(entry.workedAt).toLocaleString("en-US", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
+                      {formatDateTimeIST(entry.workedAt)}
                     </td>
                     <td className="px-4 py-2.5">
                       <Link

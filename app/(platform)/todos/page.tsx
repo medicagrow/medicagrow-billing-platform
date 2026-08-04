@@ -3,13 +3,13 @@ import { MyDayClient } from "@/components/todo/MyDayClient";
 import { accessiblePracticeIds } from "@/lib/ar-access";
 import { Role } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/session";
+import { requireNonBiller } from "@/lib/session";
 
 export const metadata: Metadata = { title: "My Day" };
 export const dynamic = "force-dynamic";
 
 export default async function MyDayPage() {
-  const user = await requireUser();
+  const user = await requireNonBiller();
 
   const practiceIds = await accessiblePracticeIds(user);
   const canAssignOthers = user.role !== Role.BILLER;

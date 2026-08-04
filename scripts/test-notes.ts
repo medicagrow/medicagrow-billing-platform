@@ -8,6 +8,11 @@
 
 import { OutcomeType } from "../lib/generated/prisma/enums";
 import { generateNote, noteDate } from "../lib/ar-note-format";
+import {
+  DEPRECATED_OUTCOME_TYPES,
+  isStatusValidForOutcome,
+  OUTCOME_ORDER,
+} from "../lib/ar-outcomes";
 
 let pass = 0;
 let fail = 0;
@@ -331,6 +336,114 @@ console.log("\n=== How Checked gating ===");
     howChecked: "IVR",
   });
   check("IVR keeps the reference", ivr.includes("Ref#R1"), ivr);
+}
+
+console.log("\n=== write-off and office endings ride on other outcomes ===");
+{
+  // Both used to be outcome types. They are now statuses any outcome can end
+  // at, so their clauses have to appear on the outcome that reached them.
+  const deniedWriteOff = generateNote(OutcomeType.DENIED, {
+    denialDate: "2026-07-20",
+    denialReason: "Timely filing",
+    writeOffAmount: "120.00",
+    reason: "Past filing limit",
+  });
+  check(
+    "a denial that ends in a write-off states it",
+    deniedWriteOff.includes("Write off $120.00 — Past filing limit."),
+    deniedWriteOff,
+  );
+  check(
+    "and keeps its denial detail",
+    deniedWriteOff.includes("Timely filing"),
+    deniedWriteOff,
+  );
+
+  const noClaimWriteOff = generateNote(OutcomeType.NO_CLAIM_ON_FILE, {
+    checkedDate: "2026-07-20",
+    writeOffAmount: "45.50",
+  });
+  check(
+    "an amount with no reason still reads",
+    noClaimWriteOff.includes("Write off $45.50."),
+    noClaimWriteOff,
+  );
+
+  const paidToOffice = generateNote(OutcomeType.PAID, {
+    amountPaid: "300.00",
+    paymentDate: "2026-07-20",
+    whatIsNeeded: "Updated insurance card",
+    urgency: "Urgent",
+  });
+  check(
+    "a paid claim can still bounce to the office",
+    paidToOffice.includes("Check with office — Updated insurance card."),
+    paidToOffice,
+  );
+  check("and urgency carries", paidToOffice.includes("URGENT."), paidToOffice);
+
+  const inProcessOffice = generateNote(OutcomeType.IN_PROCESS, {
+    checkedDate: "2026-07-20",
+    whatIsNeeded: "Corrected DOB",
+  });
+  check(
+    "in process reaches the office too",
+    inProcessOffice.includes("Check with office — Corrected DOB."),
+    inProcessOffice,
+  );
+
+  // Nothing filled in means nothing said.
+  const plainDenial = generateNote(OutcomeType.DENIED, {
+    denialDate: "2026-07-20",
+    denialReason: "Auth missing",
+  });
+  check(
+    "an untouched write-off says nothing",
+    !plainDenial.includes("Write off"),
+    plainDenial,
+  );
+  check(
+    "an untouched office question says nothing",
+    !plainDenial.includes("Check with office"),
+    plainDenial,
+  );
+}
+
+console.log("\n=== the retired outcomes are off the picker ===");
+{
+  check(
+    "Write Off is not offered",
+    !OUTCOME_ORDER.includes(OutcomeType.WRITE_OFF),
+    OUTCOME_ORDER.join(", "),
+  );
+  check(
+    "Check with Office is not offered",
+    !OUTCOME_ORDER.includes(OutcomeType.CHECK_WITH_OFFICE),
+  );
+  check(
+    "but both are still marked deprecated rather than deleted",
+    DEPRECATED_OUTCOME_TYPES.length === 2,
+  );
+  check(
+    "a denial can now be written off",
+    isStatusValidForOutcome(OutcomeType.DENIED, "Written Off"),
+  );
+  check(
+    "a paid claim can go to the office",
+    isStatusValidForOutcome(OutcomeType.PAID, "Check with Office"),
+  );
+  check(
+    "no-claim-on-file can be written off",
+    isStatusValidForOutcome(OutcomeType.NO_CLAIM_ON_FILE, "Need to Write Off"),
+  );
+  check(
+    "in process can go to the office",
+    isStatusValidForOutcome(OutcomeType.IN_PROCESS, "Check with Office"),
+  );
+  check(
+    "an unrelated status is still rejected",
+    !isStatusValidForOutcome(OutcomeType.PAID, "Need to Appeal"),
+  );
 }
 
 console.log("\n=== no outcome leaks an ISO date or ERA wording ===");

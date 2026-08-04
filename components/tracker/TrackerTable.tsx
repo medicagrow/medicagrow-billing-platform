@@ -151,7 +151,14 @@ export function TrackerTable({
                     </td>
                   ))}
                   <td className="px-4 py-3 text-center">
-                    <ScoreCell score={row.finalScore} size="lg" />
+                    {/* The score is the question; the month behind it is the answer. */}
+                    <Link
+                      href={`/tracker/${row.practiceId}/${monthYear}`}
+                      className="inline-block"
+                      aria-label={`Open ${row.practiceName}'s scorecard`}
+                    >
+                      <ScoreCell score={row.finalScore} size="lg" />
+                    </Link>
                   </td>
                   <td className="px-4 py-3">
                     {!row.entryId ? (

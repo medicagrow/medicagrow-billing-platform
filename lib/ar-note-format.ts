@@ -144,6 +144,33 @@ function receivedByInsurance(fields: NoteFields): string {
   return date ? `Claim received by ins. on ${date}.` : "";
 }
 
+/**
+ * "Write off $120.00 — Timely filing."
+ *
+ * Write Off used to be an outcome of its own. It is now an ending any outcome
+ * can reach, so the clause is appended wherever the fields were filled rather
+ * than being the whole note.
+ */
+function writeOffSentence(fields: NoteFields): string | undefined {
+  const amount = money(fields.writeOffAmount);
+  const reason = value(fields.reason);
+
+  if (!amount && !reason) return undefined;
+  if (amount && reason) return `Write off ${amount} — ${reason}.`;
+
+  return amount ? `Write off ${amount}.` : `Write off — ${reason}.`;
+}
+
+/** "Check with office — need updated insurance card. URGENT." */
+function officeSentence(fields: NoteFields): string | undefined {
+  const needed = value(fields.whatIsNeeded);
+  const urgent = value(fields.urgency) === "Urgent";
+
+  if (!needed) return undefined;
+
+  return `Check with office — ${needed}.${urgent ? " URGENT." : ""}`;
+}
+
 /** Joins sentence fragments, dropping empties and collapsing whitespace. */
 function join(...parts: (string | undefined)[]): string {
   return parts
@@ -165,6 +192,11 @@ export function generateNote(
   const prefix = claimPrefix(fields, context);
   const received = receivedByInsurance(fields);
 
+  // Appended to whichever outcome the biller filled them on: both used to be
+  // outcomes of their own and are now endings any outcome can reach.
+  const writeOff = writeOffSentence(fields);
+  const office = officeSentence(fields);
+
   switch (outcomeType) {
     case OutcomeType.PAID: {
       const amount = money(fields.amountPaid) ?? blank;
@@ -183,6 +215,7 @@ export function generateNote(
       return join(
         `${prefix}${received}`,
         `Paid/Finalized on ${paidOn} for ${amount}${copayClause}${deductibleClause} via ${paymentType}# ${paymentNumber} as ${scope} payment${bulkClause}.`,
+        office,
         contact,
         howChecked,
       );
@@ -205,6 +238,8 @@ export function generateNote(
         denialCode ? `Denial code ${denialCode}.` : undefined,
         denialDetail ? `${denialDetail}.` : undefined,
         actionText ? `${actionText}.` : undefined,
+        writeOff,
+        office,
         contact,
         howChecked,
       );
@@ -223,6 +258,8 @@ export function generateNote(
         resubmittedOn ? `Resubmitted on ${resubmittedOn}.` : undefined,
         // Worth stating last: it is the deadline the follow-up is racing.
         timelyFiling ? `Timely filing deadline: ${timelyFiling}.` : undefined,
+        writeOff,
+        office,
         contact,
         howChecked,
       );
@@ -259,6 +296,7 @@ export function generateNote(
         `${prefix}${received}`,
         `Checked on ${checkedOn} — In Process.`,
         expected ? `TAT: ${expected}.` : undefined,
+        office,
         contact,
         howChecked,
       );
