@@ -12,7 +12,7 @@ import { getSession } from "@/lib/session";
 import { canAssignTask, taskVisibilityFilter } from "@/lib/task-access";
 import { TASK_INCLUDE, toTaskDto } from "@/lib/task-serialize";
 import {
-  generateDueInstances,
+  generateDueInstancesIfNeeded,
   generateFirstInstance,
 } from "@/lib/task/recurrence";
 import { dayStart } from "@/lib/todo/access";
@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
 
   // This list crosses the whole team, so the sweep is not narrowed to the
   // caller: any occurrence that came due must exist before the page is built.
-  await generateDueInstances();
+  await generateDueInstancesIfNeeded();
 
   const searchParams = request.nextUrl.searchParams;
 

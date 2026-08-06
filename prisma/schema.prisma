@@ -300,6 +300,13 @@ model ArClaim {
   @@index([agingDays])
   @@index([insuranceName])
   @@index([patientName])
+  /// The date-of-service range filter on the batch list.
+  @@index([dateOfService])
+  /// Status-label filter and sort. The category is already indexed; the label
+  /// is the finer of the two and the one the queue filters name.
+  @@index([statusLabel])
+  /// Balance sort. Nothing filters on it, so it stands alone.
+  @@index([balance])
   @@map("ar_claims")
 }
 
@@ -326,6 +333,10 @@ model ArWorkNote {
 
   @@index([claimId, workedAt])
   @@index([workedById, workedAt])
+  /// A window with no user in it — the dashboard's biller panel groups by
+  /// workedById filtering only on workedAt, which the composite cannot serve
+  /// because workedById leads it.
+  @@index([workedAt])
   @@map("ar_work_notes")
 }
 
@@ -643,6 +654,8 @@ model Todo {
   @@index([parentTodoId])
   @@index([status, holdReleaseDate])
   @@index([subAssignedToId])
+  /// Same productivity shape as Task.
+  @@index([completedById, completedAt])
   @@map("todos")
 }
 
@@ -723,6 +736,10 @@ model Task {
   @@index([status, holdReleaseDate])
   @@index([parentTaskId])
   @@index([taskTypeId])
+  /// Every productivity figure is "who closed what, when".
+  @@index([completedById, completedAt])
+  /// generateDueInstances() sweeps the recurring parents on its own.
+  @@index([isRecurring])
   @@map("tasks")
 }
 

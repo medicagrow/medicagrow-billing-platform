@@ -49,6 +49,15 @@ other medical billing companies.
     there is one implementation rather than two that drift.
   - **Independent work goes in one `Promise.all`.** Awaiting stages in
     sequence spends a round trip waiting for each.
+- **The cron-substitute sweeps are rate limited.** `checkHoldReleases()` and
+  `generateDueInstances()` still run from the pages people load, but the
+  request path calls the `…IfNeeded()` wrappers, which run each at most once
+  every five minutes per instance via
+  [lib/lazy-schedule.ts](lib/lazy-schedule.ts). Both decide things at *day*
+  granularity, so deferring by minutes cannot change what they would do. The
+  gate key carries the scope — one person's sweep must not suppress another's
+  — and a failed sweep clears its mark so the next request retries. The
+  ungated functions stay exported for tests and any future cron.
 - **Roll-ups belong in SQL.** [lib/ar-aging-summary.ts](lib/ar-aging-summary.ts)
   and [lib/ar-insurance-aging.ts](lib/ar-insurance-aging.ts) bucket with a
   `CASE` in raw SQL rather than fetching every claim and filtering arrays —
@@ -420,6 +429,7 @@ built to take more modules without touching the routes or pages.
 ```bash
 npx tsx scripts/test-notes.ts      # generated note text, retired outcomes
 npx tsx scripts/test-aging-rollups.ts  # SQL roll-ups match a JS pass
+npx tsx scripts/test-lazy-schedule.ts  # sweep rate limit, per scope
 npx tsx scripts/test-my-queue.ts   # queue scoping (needs the dev server)
 npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
 ```

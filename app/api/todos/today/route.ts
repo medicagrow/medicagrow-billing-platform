@@ -3,7 +3,7 @@ import { TodoStatus } from "@/lib/generated/prisma/enums";
 import { requireAuth } from "@/lib/api-helpers";
 import { PRIORITY_RANK, TODO_INCLUDE, toTodoDto } from "@/lib/todo-serialize";
 import { dayEnd, dayStart } from "@/lib/todo/access";
-import { checkHoldReleases } from "@/lib/todo/hold-release";
+import { checkHoldReleasesIfNeeded } from "@/lib/todo/hold-release";
 import { dayOverrideCounts, resolveDaySchedule } from "@/lib/todo/schedule";
 import { blockMinutes } from "@/lib/validations/todo";
 import { prisma } from "@/lib/prisma";
@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
   if (denied) return denied;
 
   // Anything whose hold expired must be back in the list before it is read.
-  await checkHoldReleases(session!.user.id);
+  await checkHoldReleasesIfNeeded(session!.user.id);
 
   const dateParam = request.nextUrl.searchParams.get("date") ?? undefined;
   const start = dayStart(dateParam);

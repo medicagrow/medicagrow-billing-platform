@@ -1,5 +1,9 @@
 import { TaskStatus, TodoStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import {
+  DEFAULT_SWEEP_INTERVAL_MS,
+  runAtMostEvery,
+} from "@/lib/lazy-schedule";
 import { dayEnd, dayStart } from "@/lib/todo/access";
 
 /**
@@ -90,4 +94,19 @@ export async function checkHoldReleases(
   ]);
 
   return { todos: heldTodos.length, tasks: heldTasks.length };
+}
+
+/**
+ * The hold sweep, rate limited per instance.
+ *
+ * A release date is a date, so deferring the check by a few minutes cannot
+ * change which items come back. `checkHoldReleases()` stays ungated for
+ * tests and for anything that must not skip.
+ */
+export async function checkHoldReleasesIfNeeded(userId?: string): Promise<void> {
+  await runAtMostEvery(
+    `hold-releases:${userId ?? "all"}`,
+    DEFAULT_SWEEP_INTERVAL_MS,
+    () => checkHoldReleases(userId),
+  );
 }

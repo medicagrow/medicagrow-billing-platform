@@ -1,6 +1,10 @@
 import type { Task } from "@/lib/generated/prisma/client";
 import { TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import {
+  DEFAULT_SWEEP_INTERVAL_MS,
+  runAtMostEvery,
+} from "@/lib/lazy-schedule";
 import { dayStart } from "@/lib/todo/access";
 import {
   nextOccurrence,
@@ -349,3 +353,21 @@ export async function closeSeries(
 }
 
 export type { RecurringConfig };
+
+/**
+ * The sweep, rate limited per instance.
+ *
+ * This is what the request path should call. `generateDueInstances()` stays
+ * exported and ungated for the places that must not skip — tests, and any
+ * future cron — but a page load does not need to re-check a day-granular
+ * schedule on every request.
+ */
+export async function generateDueInstancesIfNeeded(options?: {
+  assignedToId?: string;
+}): Promise<void> {
+  await runAtMostEvery(
+    `due-instances:${options?.assignedToId ?? "all"}`,
+    DEFAULT_SWEEP_INTERVAL_MS,
+    () => generateDueInstances(options),
+  );
+}
