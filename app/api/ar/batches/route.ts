@@ -174,6 +174,8 @@ export async function POST(request: NextRequest) {
       balance: claim.balance,
       agingDays: claim.agingDays,
       providerName: claim.providerName ?? null,
+      visitId: claim.visitId ?? null,
+      visitStatus: claim.visitStatus ?? null,
       statusLabel: claim.statusLabel ?? "Pending",
       statusCategory: claim.statusCategory ?? "RED",
     })),

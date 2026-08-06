@@ -257,6 +257,8 @@ Auto Picked,PM Picked,03/14/2026,Dr. Chen,Aetna,240.50,240.50`;
       subscriber_id: null,
       patient_id: null,
       aging_days: null,
+      visit_id: null,
+      visit_status: null,
     },
   });
   check("explicit mapping wins", overridden.claims[0]?.patientName === "PM Picked", overridden.claims[0]?.patientName ?? "none");
@@ -282,6 +284,8 @@ Olivia,Nakamura,03/05/2026,Dr. Rivera,Optum,180,180`;
       subscriber_id: null,
       patient_id: null,
       aging_days: null,
+      visit_id: null,
+      visit_status: null,
     },
   });
   check("manual merge sentinel honoured", mergedByHand.claims[0]?.patientName === "Olivia Nakamura", mergedByHand.claims[0]?.patientName ?? "none");
@@ -307,6 +311,8 @@ A,03/14/2026,Dr. A,Aetna,100,100,99213`;
       subscriber_id: null,
       patient_id: null,
       aging_days: null,
+      visit_id: null,
+      visit_status: null,
     },
   });
   check("unmapped optional stays unmapped", cptSuppressed.claims[0]?.cptCode === undefined, String(cptSuppressed.claims[0]?.cptCode));
@@ -326,6 +332,54 @@ console.log("\n=== auto mapping + missing-required helpers ===");
 
   const halfMerge = { ...mapping, last_name_col: null };
   check("merge without last name counts as missing", missingRequiredFields(halfMerge).includes("patient_name"));
+}
+
+console.log("\n=== optional visit columns ===");
+{
+  // Both are optional: a file without them parses exactly as before.
+  const withoutVisit = run(`patient_name,date_of_service,provider_name,insurance_name,billed_amount,balance
+Ann Lee,03/14/2026,Dr. Chen,Aetna,240.50,240.50`);
+
+  check("a file with no visit columns still parses", withoutVisit.claims.length === 1);
+  check("visit id is absent, not blank", withoutVisit.claims[0]?.visitId === undefined);
+  check("visit status likewise", withoutVisit.claims[0]?.visitStatus === undefined);
+
+  const withVisit = run(`patient_name,date_of_service,provider_name,insurance_name,billed_amount,balance,visit_id,visit_status
+Ann Lee,03/14/2026,Dr. Chen,Aetna,240.50,240.50,V-8891,Checked Out`);
+
+  check("visit_id maps", withVisit.claims[0]?.visitId === "V-8891", withVisit.claims[0]?.visitId ?? "none");
+  check(
+    "visit_status maps",
+    withVisit.claims[0]?.visitStatus === "Checked Out",
+    withVisit.claims[0]?.visitStatus ?? "none",
+  );
+
+  // Header spellings people actually export.
+  const spellings = run(`Patient,DOS,Provider,Payer,Charges,Balance,Visit ID,Visit Status
+Bob Ray,03/14/2026,Dr. Chen,Aetna,100.00,100.00,V-1,Arrived`);
+
+  check("spaced headers detect", spellings.claims[0]?.visitId === "V-1", spellings.claims[0]?.visitId ?? "none");
+  check(
+    "and so does the status beside it",
+    spellings.claims[0]?.visitStatus === "Arrived",
+    spellings.claims[0]?.visitStatus ?? "none",
+  );
+
+  // "visit" alone is a visit_id candidate; visit_status resolves first so it
+  // cannot be swallowed by it.
+  const ambiguous = run(`patient_name,date_of_service,provider_name,insurance_name,billed_amount,balance,VisitStatus,Visit
+Cy Diaz,03/14/2026,Dr. Chen,Aetna,50.00,50.00,Pending,V-77`);
+
+  check(
+    "status wins its own column",
+    ambiguous.claims[0]?.visitStatus === "Pending",
+    ambiguous.claims[0]?.visitStatus ?? "none",
+  );
+  check(
+    "and the bare 'Visit' becomes the id",
+    ambiguous.claims[0]?.visitId === "V-77",
+    ambiguous.claims[0]?.visitId ?? "none",
+  );
 }
 
 console.log("\n=== shipped template parses ===");

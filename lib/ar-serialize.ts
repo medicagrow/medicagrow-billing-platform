@@ -23,6 +23,8 @@ export interface ClaimDto {
   billingProvider: string | null;
   renderingProvider: string | null;
   location: string | null;
+  visitId: string | null;
+  visitStatus: string | null;
   statusCategory: StatusCategory;
   statusLabel: string;
   assignedToId: string | null;
@@ -53,6 +55,8 @@ type ClaimRow = {
   billingProvider: string | null;
   renderingProvider: string | null;
   location: string | null;
+  visitId: string | null;
+  visitStatus: string | null;
   statusCategory: StatusCategory;
   statusLabel: string;
   assignedToId: string | null;
@@ -87,6 +91,8 @@ export function toClaimDto(claim: ClaimRow): ClaimDto {
     billingProvider: claim.billingProvider,
     renderingProvider: claim.renderingProvider,
     location: claim.location,
+    visitId: claim.visitId,
+    visitStatus: claim.visitStatus,
     statusCategory: claim.statusCategory,
     statusLabel: claim.statusLabel,
     assignedToId: claim.assignedToId,

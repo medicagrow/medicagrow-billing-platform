@@ -37,6 +37,15 @@ other medical billing companies.
   rather than being orphaned.
 - Work-note tables (`ar_work_notes`, `eob_work_notes`, `task_notes`) are
   **add-only**.
+- **Paginated lists share one component.**
+  [components/ui/Pagination.tsx](components/ui/Pagination.tsx) renders the page
+  numbers (first two, last two, current ± 1, "…" between — and a gap of exactly
+  one page is filled rather than elided), the 50/100/200/500 size selector and
+  the "Showing X–Y of Z" line. Page size and optional-column choices persist
+  per browser via `useLocalSetting()` in
+  [lib/hooks/useLocalSetting.ts](lib/hooks/useLocalSetting.ts), which reads
+  localStorage **after** mount — reading it during render would desynchronise
+  the server's HTML from the client's first paint.
 - **Practice pickers read the top bar.** `usePracticeDefault()` returns the
   globally selected practice; [components/ui/PracticeField.tsx](components/ui/PracticeField.tsx)
   renders it read-only with a "Change in top bar" hint when one is selected, and
@@ -310,6 +319,28 @@ npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
 - Cross-practice roll-ups live in [lib/ar-summary.ts](lib/ar-summary.ts)
   (`arSummary`, `billerProgress`) and are shared by the homepage, the AR
   dashboard page and `/api/ar/dashboard` so the three cannot disagree.
+
+### Batch claim list
+
+- **Assignee dropdowns offer the practice's own people, plus Owners** —
+  `practiceAssignees()` in [lib/ar-access.ts](lib/ar-access.ts), used by the
+  batch page and `GET /api/ar/batches/[batchId]`. Owners hold no
+  `UserPractice` rows but reach everything, so they are added explicitly;
+  offering the whole staff list let a batch be handed to somebody who cannot
+  open it.
+- Five filters AND together: insurance, aging, provider, date-of-service range
+  and a patient/CPT search. **Each filter that needs an OR of its own goes into
+  an `AND: []` array** rather than a top-level `OR` key, which the object
+  spread would silently overwrite. The provider filter matches
+  `renderingProvider` **or** `providerName`, because the column shows
+  whichever the claim has.
+- The search box debounces 300 ms — a request per keystroke lets a slow early
+  response land after a fast later one.
+- `visitId` and `visitStatus` are optional reference fields some EHRs export.
+  Auto-detected by the standard parser, **hidden by default** in the claim
+  table, and toggled per browser from the Columns menu. `visit_status` is
+  resolved before `visit_id` so the more specific header claims its column
+  first — a bare "Visit" would otherwise take either.
 
 ### Claim visibility rules
 

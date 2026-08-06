@@ -60,6 +60,10 @@ export async function GET(request: NextRequest) {
     insuranceName: searchParams.get("insuranceName") ?? undefined,
     insuranceNames: searchParams.get("insuranceNames") ?? undefined,
     agingBuckets: searchParams.get("agingBuckets") ?? undefined,
+    providerNames: searchParams.get("providerNames") ?? undefined,
+    dosFrom: searchParams.get("dosFrom") ?? undefined,
+    dosTo: searchParams.get("dosTo") ?? undefined,
+    search: searchParams.get("search") ?? undefined,
     sort: searchParams.get("sort") ?? undefined,
     direction: searchParams.get("direction") ?? undefined,
     agingBucket: searchParams.get("agingBucket") ?? undefined,
@@ -102,8 +106,55 @@ export async function GET(request: NextRequest) {
       ? { assignedToId: session!.user.id }
       : {};
 
+  /**
+   * Filters that need an OR of their own, collected so they can be ANDed
+   * together. Writing them as top-level `OR` keys would mean the last one
+   * silently replaced the others — the bug the recurring task filter had.
+   */
+  const anyOf: Prisma.ArClaimWhereInput[] = [];
+
+  // Each selected bucket is its own agingDays range; any of them qualifies.
+  if (agingBucketRanges.length > 0) anyOf.push({ OR: agingBucketRanges });
+
+  // A provider matches on either field, since the column shows either.
+  if (filters.providerNames) {
+    anyOf.push({
+      OR: [
+        { renderingProvider: { in: filters.providerNames } },
+        { providerName: { in: filters.providerNames } },
+      ],
+    });
+  }
+
+  // Free text spans the patient and the CPT — one box, two places to look.
+  if (filters.search) {
+    anyOf.push({
+      OR: [
+        { patientName: { contains: filters.search, mode: "insensitive" } },
+        { cptCode: { contains: filters.search, mode: "insensitive" } },
+      ],
+    });
+  }
+
+  /**
+   * Dates of service are calendar dates stored at UTC midnight, so both ends
+   * of the range are that same midnight and the bounds are inclusive. Passing
+   * the YYYY-MM-DD string straight to Prisma would not parse as a DateTime.
+   */
+  const utcDay = (date: string) => new Date(`${date}T00:00:00.000Z`);
+
+  const dateOfService =
+    filters.dosFrom || filters.dosTo
+      ? {
+          ...(filters.dosFrom ? { gte: utcDay(filters.dosFrom) } : {}),
+          ...(filters.dosTo ? { lte: utcDay(filters.dosTo) } : {}),
+        }
+      : undefined;
+
   const where = {
     batchId: filters.batchId,
+    ...(anyOf.length > 0 ? { AND: anyOf } : {}),
+    ...(dateOfService ? { dateOfService } : {}),
     ...(filters.unassigned === "true" ? { assignedToId: null } : {}),
     ...(filters.assignedToId ? { assignedToId: filters.assignedToId } : {}),
     ...(filters.statusCategory
@@ -113,8 +164,6 @@ export async function GET(request: NextRequest) {
     ...(filters.insuranceNames
       ? { insuranceName: { in: filters.insuranceNames } }
       : {}),
-    // Each bucket is its own agingDays range, so several are an OR.
-    ...(agingBucketRanges.length > 0 ? { OR: agingBucketRanges } : {}),
     ...(filters.insuranceName
       ? { insuranceName: { contains: filters.insuranceName, mode: "insensitive" as const } }
       : {}),

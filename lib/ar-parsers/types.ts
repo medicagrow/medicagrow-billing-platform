@@ -24,6 +24,9 @@ export interface ParsedClaim {
   location?: string;
   ehrClaimStatus?: string;
   ehrTags?: string;
+  /** Optional visit identifiers some EHRs carry. Reference only. */
+  visitId?: string;
+  visitStatus?: string;
   /** Every standard-CSV claim imports as Pending / RED. */
   statusLabel?: string;
   statusCategory?: StatusCategory;

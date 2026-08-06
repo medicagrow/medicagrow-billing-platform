@@ -131,6 +131,10 @@ export const FIELD_CANDIDATES = {
   subscriber_id: ["subscriber_id", "subscriber_no", "member_id", "subscriber"],
   patient_id: ["patient_id", "patient_acct_no", "account_number", "patient_account"],
   aging_days: ["aging_days", "aging", "days_aged", "age_days"],
+  // "visit_status" is resolved before "visit_id" so the more specific header
+  // claims its column first; "visit" alone would otherwise take either.
+  visit_status: ["visit_status", "visitstatus", "visit status", "appt_status"],
+  visit_id: ["visit_id", "visitid", "visit id", "visit", "encounter_id"],
 } as const;
 
 export type FieldKey = keyof typeof FIELD_CANDIDATES;
@@ -150,6 +154,8 @@ export const OPTIONAL_FIELDS = [
   "subscriber_id",
   "patient_id",
   "aging_days",
+  "visit_id",
+  "visit_status",
 ] as const;
 
 export type RequiredField = (typeof REQUIRED_FIELDS)[number];
@@ -171,6 +177,8 @@ export const FIELD_LABELS: Record<RequiredField | OptionalField, string> = {
   subscriber_id: "Subscriber ID",
   patient_id: "Patient ID",
   aging_days: "Aging Days",
+  visit_id: "Visit ID",
+  visit_status: "Visit Status",
 };
 
 /**
@@ -191,6 +199,8 @@ export interface FieldMapping {
   subscriber_id: string | null;
   patient_id: string | null;
   aging_days: string | null;
+  visit_id: string | null;
+  visit_status: string | null;
 }
 
 /**
@@ -241,6 +251,8 @@ export function autoFieldMapping(headers: string[]): FieldMapping {
     subscriber_id: headerAt("subscriber_id"),
     patient_id: headerAt("patient_id"),
     aging_days: headerAt("aging_days"),
+    visit_id: headerAt("visit_id"),
+    visit_status: headerAt("visit_status"),
   };
 }
 
@@ -276,4 +288,6 @@ export const FIELD_RESOLUTION_ORDER: FieldKey[] = [
   "balance",
   "cpt_code",
   "aging_days",
+  "visit_status",
+  "visit_id",
 ];

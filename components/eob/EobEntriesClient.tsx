@@ -5,12 +5,13 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { StatusBadge } from "@/components/ar/StatusBadge";
 import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
+import { isPageSize, Pagination } from "@/components/ui/Pagination";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import type { EobEntryDto } from "@/lib/eob-serialize";
+import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { formatDate, formatUSD } from "@/lib/format";
 import { EobEntryType, StatusCategory } from "@/lib/generated/prisma/enums";
 import { usePracticeDefault } from "@/lib/hooks/usePracticeDefault";
@@ -22,7 +23,6 @@ type SortKey =
   | "payerName"
   | "status";
 
-const PAGE_SIZE = 50;
 
 const TYPE_VARIANT: Record<EobEntryType, "red" | "amber"> = {
   DENIAL: "red",
@@ -56,6 +56,11 @@ export function EobEntriesClient({
   const [entries, setEntries] = useState<EobEntryDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useLocalSetting(
+    "eob.entries.pageSize",
+    50,
+    isPageSize,
+  );
   const [loading, setLoading] = useState(true);
 
   const [entryType, setEntryType] = useState(initialEntryType);
@@ -74,7 +79,7 @@ export function EobEntriesClient({
   const query = useMemo(() => {
     const params = new URLSearchParams({
       page: String(page),
-      pageSize: String(PAGE_SIZE),
+      pageSize: String(pageSize),
       sort: sortKey,
       direction: ascending ? "asc" : "desc",
     });
@@ -90,6 +95,7 @@ export function EobEntriesClient({
     return params.toString();
   }, [
     page,
+    pageSize,
     sortKey,
     ascending,
     entryType,
@@ -133,7 +139,12 @@ export function EobEntriesClient({
     to,
   ]);
 
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+
+  // A bigger page can leave the cursor past the end of the list.
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
 
   const SortHeader = ({
     label,
@@ -372,32 +383,19 @@ export function EobEntriesClient({
             </table>
           </div>
 
-          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-sm text-slate-600">
-            <span>
-              {total} entr{total === 1 ? "y" : "ies"}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-                disabled={page <= 1}
-              >
-                Previous
-              </Button>
-              <span className="tabular-nums">
-                Page {page} of {pageCount}
-              </span>
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  setPage((current) => Math.min(pageCount, current + 1))
-                }
-                disabled={page >= pageCount}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={pageCount}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            noun="entries"
+            filtered={Boolean(entryType || statusCategory || payerName || assignedToId || from || to)}
+          />
         </div>
       )}
     </div>

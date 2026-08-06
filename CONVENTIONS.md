@@ -127,7 +127,14 @@ const [rows, total] = await Promise.all([
 return paginatedResponse(rows, total, pagination);
 ```
 
-Default page size 25, hard maximum 100.
+Default page size 25, hard maximum **500**. `parsePagination()` reads either
+`pageSize` or `limit` and clamps rather than rejecting — a page size is a
+display preference, and failing a whole request over one is a worse answer than
+showing a sensible number of rows.
+
+List views render [components/ui/Pagination.tsx](components/ui/Pagination.tsx),
+which offers 50 / 100 / 200 / 500 and remembers the choice per browser through
+`useLocalSetting()`. Do not hand-roll Previous/Next again.
 
 ## 11. All Prisma access goes through lib/prisma.ts
 

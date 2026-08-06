@@ -55,7 +55,14 @@ export function requireRole(
  * ------------------------------------------------------------------ */
 
 export const DEFAULT_PAGE_SIZE = 25;
-export const MAX_PAGE_SIZE = 100;
+
+/**
+ * 500 rows is the largest page the list views offer. It is a lot for one
+ * response, but a biller reconciling a batch against a payer portal wants the
+ * whole thing on one screen, and the alternative was ten trips through
+ * Previous/Next.
+ */
+export const MAX_PAGE_SIZE = 500;
 
 export type Pagination = {
   page: number;
@@ -64,10 +71,21 @@ export type Pagination = {
   take: number;
 };
 
-/** Reads ?page & ?pageSize, clamped so an unbounded query is impossible. */
+/**
+ * Reads `?page` and the page size, clamped so an unbounded query is
+ * impossible.
+ *
+ * Both `pageSize` and `limit` are accepted for the size — the list components
+ * send `pageSize`, and `limit` reads more naturally from a hand-written
+ * request. Anything out of range is clamped rather than rejected: a page size
+ * is a display preference, and failing a whole request over one is a worse
+ * answer than showing a sensible number of rows.
+ */
 export function parsePagination(searchParams: URLSearchParams): Pagination {
   const rawPage = Number(searchParams.get("page"));
-  const rawPageSize = Number(searchParams.get("pageSize"));
+  const rawPageSize = Number(
+    searchParams.get("pageSize") ?? searchParams.get("limit"),
+  );
 
   const page =
     Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;

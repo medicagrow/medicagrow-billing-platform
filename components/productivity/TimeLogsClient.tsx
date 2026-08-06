@@ -5,7 +5,9 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { MultiSelectDropdown } from "@/components/ui/MultiSelectDropdown";
+import { isPageSize, Pagination } from "@/components/ui/Pagination";
 import { downloadCsv } from "@/lib/csv-export";
+import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { usePractice } from "@/lib/contexts/PracticeContext";
 import { formatDateIST, formatTimeIST } from "@/lib/timezone";
 import { TaskStatus } from "@/lib/generated/prisma/enums";
@@ -53,8 +55,6 @@ const TABS: { value: Tab; label: string }[] = [
   { value: "taskType", label: "By Task Type" },
   { value: "overrun", label: "Overrun Tasks" },
 ];
-
-const SESSIONS_PER_PAGE = 50;
 
 const EMPTY_SUMMARY: TimeLogSummary = {
   totalLoggedMinutes: 0,
@@ -177,6 +177,11 @@ export function TimeLogsClient({
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [pageSize, setPageSize] = useLocalSetting(
+    "timeLogs.sessions.pageSize",
+    50,
+    isPageSize,
+  );
   const [totalSessions, setTotalSessions] = useState(0);
 
   function applyPreset(next: Preset) {
@@ -248,7 +253,7 @@ export function TimeLogsClient({
 
     try {
       const response = await fetch(
-        `/api/time-logs/sessions?${query}&page=${page}&pageSize=${SESSIONS_PER_PAGE}`,
+        `/api/time-logs/sessions?${query}&page=${page}&pageSize=${pageSize}`,
       );
       const payload = await response.json().catch(() => null);
 
@@ -265,7 +270,7 @@ export function TimeLogsClient({
     } finally {
       setSessionsLoading(false);
     }
-  }, [query, page]);
+  }, [query, page, pageSize]);
 
   useEffect(() => {
     loadSummary();
@@ -952,33 +957,19 @@ export function TimeLogsClient({
               </table>
             </div>
 
-            {totalPages > 1 ? (
-              <div className="mt-3 flex items-center justify-between text-sm text-slate-600">
-                <span>
-                  Page {page} of {totalPages}
-                </span>
-                <div className="flex gap-2">
-                  <Button
-                    variant="secondary"
-                    className="px-2.5 py-1 text-xs"
-                    onClick={() => setPage((current) => Math.max(1, current - 1))}
-                    disabled={page <= 1}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    className="px-2.5 py-1 text-xs"
-                    onClick={() =>
-                      setPage((current) => Math.min(totalPages, current + 1))
-                    }
-                    disabled={page >= totalPages}
-                  >
-                    Next
-                  </Button>
-                </div>
-              </div>
-            ) : null}
+            <Pagination
+              currentPage={page}
+              totalPages={totalPages}
+              totalItems={totalSessions}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+              noun="sessions"
+              filtered={filtersActive}
+            />
           </>
         )}
       </div>

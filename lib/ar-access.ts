@@ -56,6 +56,36 @@ export async function canAccessPractice(
   return assignment !== null;
 }
 
+export interface PracticeUser {
+  id: string;
+  name: string;
+  role: Role;
+}
+
+/**
+ * Who a practice's work can be assigned to.
+ *
+ * Members of the practice, plus every active Owner — an Owner holds no
+ * `UserPractice` rows but has implicit access to everything, so leaving them
+ * out would make the platform's own administrator unassignable. Offering the
+ * whole staff list instead meant a batch could be handed to somebody who
+ * cannot open it, which reads as a bug the moment they try.
+ */
+export async function practiceAssignees(
+  practiceId: string,
+): Promise<PracticeUser[]> {
+  const users = await prisma.user.findMany({
+    where: {
+      isActive: true,
+      OR: [{ practices: { some: { practiceId } } }, { role: Role.OWNER }],
+    },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, role: true },
+  });
+
+  return users;
+}
+
 export async function canAccessBatch(
   user: SessionUserLike,
   batchId: string,

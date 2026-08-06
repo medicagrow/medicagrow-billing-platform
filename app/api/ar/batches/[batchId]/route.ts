@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { apiErrorResponse, requireAuth } from "@/lib/api-helpers";
-import { canAccessBatch } from "@/lib/ar-access";
+import { canAccessBatch, practiceAssignees } from "@/lib/ar-access";
 import { batchStats, daysBetween } from "@/lib/ar-stats";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
@@ -31,7 +31,12 @@ export async function GET(
     return apiErrorResponse("Batch not found.", 404);
   }
 
-  const stats = await batchStats(batch.id);
+  // Who this batch's claims can be assigned to: the practice's own people,
+  // plus Owners, who hold no membership rows but can reach everything.
+  const [stats, practiceUsers] = await Promise.all([
+    batchStats(batch.id),
+    practiceAssignees(batch.practiceId),
+  ]);
 
   return NextResponse.json({
     batch: {
@@ -52,5 +57,6 @@ export async function GET(
       daysOpen: daysBetween(batch.uploadedAt, batch.closedAt ?? new Date()),
     },
     stats,
+    practiceUsers,
   });
 }

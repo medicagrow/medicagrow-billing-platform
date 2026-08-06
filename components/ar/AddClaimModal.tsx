@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { DecimalInput } from "@/components/ui/DecimalInput";
 import { FieldError, Input, Label } from "@/components/ui/Input";
 import { Modal } from "@/components/ui/Modal";
+import { NoSpaceInput } from "@/components/ui/NoSpaceInput";
 import { Select } from "@/components/ui/Select";
 import { useToast } from "@/components/ui/toast";
 
@@ -24,6 +25,8 @@ const EMPTY = {
   subscriberId: "",
   billedAmount: "",
   balance: "",
+  visitId: "",
+  visitStatus: "",
   assignedToId: "",
 };
 
@@ -85,6 +88,8 @@ export function AddClaimModal({
           claimNumber: form.claimNumber.trim() || undefined,
           cptCode: form.cptCode.trim() || undefined,
           subscriberId: form.subscriberId.trim() || undefined,
+          visitId: form.visitId.trim() || undefined,
+          visitStatus: form.visitStatus.trim() || undefined,
           assignedToId: form.assignedToId || undefined,
         }),
       });
@@ -216,6 +221,26 @@ export function AddClaimModal({
                 id="balance"
                 value={form.balance}
                 onChange={(value) => set("balance", value)}
+                disabled={saving}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="visitId">Visit ID (optional)</Label>
+              <NoSpaceInput
+                id="visitId"
+                value={form.visitId}
+                onChange={(value) => set("visitId", value)}
+                disabled={saving}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="visitStatus">Visit status (optional)</Label>
+              <Input
+                id="visitStatus"
+                value={form.visitStatus}
+                onChange={(event) => set("visitStatus", event.target.value)}
                 disabled={saving}
               />
             </div>

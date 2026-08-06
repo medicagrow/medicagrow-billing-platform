@@ -116,6 +116,8 @@ function resolveFromMapping(
   assign("subscriber_id", mapping.subscriber_id);
   assign("patient_id", mapping.patient_id);
   assign("aging_days", mapping.aging_days);
+  assign("visit_id", mapping.visit_id);
+  assign("visit_status", mapping.visit_status);
 
   const firstNameIndex = indexOfHeader(headers, mapping.first_name_col);
   const lastNameIndex = indexOfHeader(headers, mapping.last_name_col);
@@ -445,6 +447,8 @@ export function parseStandardCsv(
       balance: balance!,
       agingDays: agingDays ?? calculateAgingDays(dateOfService!, asOf),
       providerName: providerName!,
+      visitId: at(row, "visit_id"),
+      visitStatus: at(row, "visit_status"),
       statusLabel: DEFAULT_STATUS_LABEL,
       statusCategory: DEFAULT_STATUS_CATEGORY,
     });

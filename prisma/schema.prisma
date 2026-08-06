@@ -271,6 +271,11 @@ model ArClaim {
   ehrClaimStatus String?
   ehrTags        String?
 
+  /// Optional visit identifiers some EHRs export. Reference only — the claim
+  /// list hides both columns until somebody turns them on.
+  visitId     String?
+  visitStatus String?
+
   lastWorkedAt   DateTime?
   lastWorkedById String?
   createdAt      DateTime  @default(now())

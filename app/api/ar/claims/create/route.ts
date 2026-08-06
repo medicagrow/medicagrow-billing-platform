@@ -82,6 +82,8 @@ export async function POST(request: NextRequest) {
       balance: input.balance,
       agingDays: input.agingDays ?? calculateAgingDays(dateOfService, new Date()),
       providerName: input.providerName,
+      visitId: input.visitId ?? null,
+      visitStatus: input.visitStatus ?? null,
       assignedToId: input.assignedToId ?? null,
       statusLabel: DEFAULT_STATUS_LABEL,
       statusCategory: DEFAULT_STATUS_CATEGORY,

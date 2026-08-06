@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { AgingBadge } from "@/components/ar/AgingBadge";
 import { StatusBadge } from "@/components/ar/StatusBadge";
-import { Button } from "@/components/ui/Button";
+import { isPageSize, Pagination } from "@/components/ui/Pagination";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import type { ClaimDto } from "@/lib/ar-serialize";
+import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { RED_STATUSES } from "@/lib/ar-status";
 import { usePractice } from "@/lib/contexts/PracticeContext";
 import { formatDate, formatUSD } from "@/lib/format";
@@ -41,6 +42,11 @@ export function MyQueueClient({
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [pageSize, setPageSize] = useLocalSetting(
+    "ar.myQueue.pageSize",
+    50,
+    isPageSize,
+  );
 
   const [practiceId, setPracticeId] = useState("");
   const [insuranceName, setInsuranceName] = useState("");
@@ -54,7 +60,7 @@ export function MyQueueClient({
   const query = useMemo(() => {
     const params = new URLSearchParams({
       page: String(page),
-      pageSize: "50",
+      pageSize: String(pageSize),
     });
     // Local dropdown wins when set; otherwise fall back to the global filter.
     const effectivePracticeId = practiceId || selectedPracticeId;
@@ -67,6 +73,7 @@ export function MyQueueClient({
     return params.toString();
   }, [
     page,
+    pageSize,
     practiceId,
     selectedPracticeId,
     insuranceName,
@@ -349,33 +356,21 @@ export function MyQueueClient({
             </table>
           </div>
 
-          {totalPages > 1 ? (
-            <div className="mt-3 flex items-center justify-between text-sm text-slate-600">
-              <span>
-                Page {page} of {totalPages}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  className="px-2.5 py-1 text-xs"
-                  onClick={() => setPage((current) => Math.max(1, current - 1))}
-                  disabled={page <= 1}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="secondary"
-                  className="px-2.5 py-1 text-xs"
-                  onClick={() =>
-                    setPage((current) => Math.min(totalPages, current + 1))
-                  }
-                  disabled={page >= totalPages}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
-          ) : null}
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            totalItems={summary.totalClaims}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            noun="claims"
+            filtered={Boolean(
+              practiceId || insuranceName || statusLabel || followUpFrom || followUpTo,
+            )}
+          />
         </>
       )}
     </div>

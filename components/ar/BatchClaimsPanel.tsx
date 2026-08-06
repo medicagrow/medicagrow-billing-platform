@@ -8,11 +8,15 @@ import { StatusBadge } from "@/components/ar/StatusBadge";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
 import { MultiSelectDropdown } from "@/components/ui/MultiSelectDropdown";
+import { isPageSize, Pagination } from "@/components/ui/Pagination";
 import { Select } from "@/components/ui/Select";
+import { SettingsIcon } from "@/components/ui/icons";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { AGING_BUCKETS } from "@/lib/ar-aging";
+import { isBoolean, useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import type { ClaimDto } from "@/lib/ar-serialize";
 import { formatDate, formatUSD } from "@/lib/format";
 
@@ -40,6 +44,7 @@ export function BatchClaimsPanel({
   batchClosed,
   assignees,
   insuranceOptions,
+  providerOptions,
   initialTab = "all",
 }: {
   batchId: string;
@@ -47,6 +52,8 @@ export function BatchClaimsPanel({
   batchClosed: boolean;
   assignees: Assignee[];
   insuranceOptions: string[];
+  /** Both provider fields, merged — the column shows whichever it has. */
+  providerOptions: string[];
   /** Seeded from the URL, so a dashboard count lands on what it counted. */
   initialTab?: TabKey;
 }) {
@@ -64,10 +71,50 @@ export function BatchClaimsPanel({
   const [ascending, setAscending] = useState(false);
   const [assignTo, setAssignTo] = useState("");
   const [assigning, setAssigning] = useState(false);
+  /**
+   * Optional columns, off by default. Most batches carry neither field, and a
+   * column of dashes costs width the columns people actually read need.
+   */
+  const [showVisitId, setShowVisitId] = useLocalSetting(
+    "ar.claims.showVisitId",
+    false,
+    isBoolean,
+  );
+  const [showVisitStatus, setShowVisitStatus] = useLocalSetting(
+    "ar.claims.showVisitStatus",
+    false,
+    isBoolean,
+  );
+  const [columnsOpen, setColumnsOpen] = useState(false);
+
+  const [pageSize, setPageSize] = useLocalSetting(
+    "ar.claims.pageSize",
+    50,
+    isPageSize,
+  );
+
   const [insuranceFilter, setInsuranceFilter] = useState<string[]>([]);
   const [agingFilter, setAgingFilter] = useState<string[]>([]);
+  const [providerFilter, setProviderFilter] = useState<string[]>([]);
+  const [dosFrom, setDosFrom] = useState("");
+  const [dosTo, setDosTo] = useState("");
 
-  const pageSize = 50;
+  /**
+   * Typed search is debounced: `search` is what the box shows, `debouncedSearch`
+   * is what the query uses. Firing on every keystroke would put a request in
+   * flight per character and let a slow one land after a faster later one.
+   */
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -87,11 +134,30 @@ export function BatchClaimsPanel({
     if (agingFilter.length > 0) {
       params.set("agingBuckets", agingFilter.join(","));
     }
+    if (providerFilter.length > 0) {
+      params.set("providerNames", providerFilter.join(","));
+    }
+    if (dosFrom) params.set("dosFrom", dosFrom);
+    if (dosTo) params.set("dosTo", dosTo);
+    if (debouncedSearch) params.set("search", debouncedSearch);
     params.set("sort", sortKey);
     params.set("direction", ascending ? "asc" : "desc");
 
     return params.toString();
-  }, [batchId, page, tab, insuranceFilter, agingFilter, sortKey, ascending]);
+  }, [
+    batchId,
+    page,
+    pageSize,
+    tab,
+    insuranceFilter,
+    agingFilter,
+    providerFilter,
+    dosFrom,
+    dosTo,
+    debouncedSearch,
+    sortKey,
+    ascending,
+  ]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -120,9 +186,38 @@ export function BatchClaimsPanel({
     load();
   }, [load]);
 
+  // A changed filter changes which rows exist, so a selection made against
+  // the old set is no longer meaningful.
   useEffect(() => {
     setSelected(new Set());
-  }, [tab, page, insuranceFilter, agingFilter]);
+  }, [
+    tab,
+    page,
+    insuranceFilter,
+    agingFilter,
+    providerFilter,
+    dosFrom,
+    dosTo,
+    debouncedSearch,
+  ]);
+
+  const filtersActive =
+    insuranceFilter.length > 0 ||
+    agingFilter.length > 0 ||
+    providerFilter.length > 0 ||
+    dosFrom !== "" ||
+    dosTo !== "" ||
+    search !== "";
+
+  function clearFilters() {
+    setInsuranceFilter([]);
+    setAgingFilter([]);
+    setProviderFilter([]);
+    setDosFrom("");
+    setDosTo("");
+    setSearch("");
+    setPage(1);
+  }
 
   const allOnPageSelected =
     claims.length > 0 && claims.every((claim) => selected.has(claim.id));
@@ -185,6 +280,11 @@ export function BatchClaimsPanel({
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  // A bigger page can leave the cursor past the end of the list.
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
 
   const SortHeader = ({
     label,
@@ -267,6 +367,112 @@ export function BatchClaimsPanel({
           aria-label="Aging"
           className="w-auto min-w-[180px]"
         />
+
+        <MultiSelectDropdown
+          options={providerOptions.map((name) => ({
+            label: name,
+            value: name,
+          }))}
+          selected={providerFilter}
+          onChange={(next) => {
+            setProviderFilter(next);
+            setPage(1);
+          }}
+          placeholder="All providers"
+          allLabel="All Providers"
+          noun="providers"
+          aria-label="Provider"
+          className="w-auto min-w-[200px]"
+        />
+
+        <div className="flex items-center gap-1.5">
+          <label htmlFor="dosFrom" className="text-xs text-slate-500">
+            DOS
+          </label>
+          <Input
+            id="dosFrom"
+            type="date"
+            value={dosFrom}
+            max={dosTo || undefined}
+            onChange={(event) => {
+              setDosFrom(event.target.value);
+              setPage(1);
+            }}
+            className="w-auto"
+            aria-label="Date of service from"
+          />
+          <span className="text-xs text-slate-400">to</span>
+          <Input
+            id="dosTo"
+            type="date"
+            value={dosTo}
+            min={dosFrom || undefined}
+            onChange={(event) => {
+              setDosTo(event.target.value);
+              setPage(1);
+            }}
+            className="w-auto"
+            aria-label="Date of service to"
+          />
+        </div>
+
+        <Input
+          type="search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search patient name or CPT..."
+          aria-label="Search patient name or CPT"
+          className="w-auto min-w-[220px]"
+        />
+
+        {filtersActive ? (
+          <Button
+            variant="secondary"
+            className="px-3 py-2 text-xs"
+            onClick={clearFilters}
+          >
+            Clear all filters
+          </Button>
+        ) : null}
+
+        <div className="relative">
+          <Button
+            variant="secondary"
+            className="px-3 py-2 text-xs"
+            onClick={() => setColumnsOpen((open) => !open)}
+            aria-expanded={columnsOpen}
+            aria-haspopup="true"
+          >
+            <SettingsIcon className="h-3.5 w-3.5" />
+            Columns
+          </Button>
+
+          {columnsOpen ? (
+            <div className="absolute right-0 z-30 mt-1 w-52 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+              <p className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                Optional columns
+              </p>
+              <label className="flex items-center gap-2 rounded px-1 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+                <input
+                  type="checkbox"
+                  checked={showVisitId}
+                  onChange={(event) => setShowVisitId(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                Visit ID
+              </label>
+              <label className="flex items-center gap-2 rounded px-1 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+                <input
+                  type="checkbox"
+                  checked={showVisitStatus}
+                  onChange={(event) => setShowVisitStatus(event.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                Visit Status
+              </label>
+            </div>
+          ) : null}
+        </div>
 
         {canAssign && !batchClosed ? (
           <div className="ml-auto flex items-center gap-2">
@@ -354,6 +560,12 @@ export function BatchClaimsPanel({
                   </th>
                   <th className="px-4 py-3">DOS</th>
                   <th className="px-4 py-3">CPT</th>
+                  {showVisitId ? (
+                    <th className="px-4 py-3">Visit ID</th>
+                  ) : null}
+                  {showVisitStatus ? (
+                    <th className="px-4 py-3">Visit Status</th>
+                  ) : null}
                   <th className="px-4 py-3 text-right">
                     <SortHeader label="Balance" sortAs="balance" />
                   </th>
@@ -413,6 +625,20 @@ export function BatchClaimsPanel({
                       <td className="px-4 py-3 text-slate-600">
                         {claim.cptCode ?? "—"}
                       </td>
+                      {showVisitId ? (
+                        <td className="px-4 py-3 text-slate-600">
+                          {claim.visitId ?? (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                      ) : null}
+                      {showVisitStatus ? (
+                        <td className="px-4 py-3 text-slate-600">
+                          {claim.visitStatus ?? (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                      ) : null}
                       <td className="px-4 py-3 text-right tabular-nums text-slate-900">
                         {formatUSD(claim.balance)}
                       </td>
@@ -460,32 +686,19 @@ export function BatchClaimsPanel({
             </table>
           </div>
 
-          <div className="mt-3 flex items-center justify-between text-sm text-slate-600">
-            <span>
-              {total} claim{total === 1 ? "" : "s"} · page {page} of{" "}
-              {totalPages}
-            </span>
-            <div className="flex gap-2">
-              <Button
-                variant="secondary"
-                className="px-2.5 py-1 text-xs"
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-                disabled={page <= 1}
-              >
-                Previous
-              </Button>
-              <Button
-                variant="secondary"
-                className="px-2.5 py-1 text-xs"
-                onClick={() =>
-                  setPage((current) => Math.min(totalPages, current + 1))
-                }
-                disabled={page >= totalPages}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            noun="claims"
+            filtered={filtersActive}
+          />
         </>
       )}
     </div>

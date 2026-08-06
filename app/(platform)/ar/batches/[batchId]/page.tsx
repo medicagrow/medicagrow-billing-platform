@@ -10,11 +10,15 @@ import { CloseBatchButton } from "@/components/ar/CloseBatchButton";
 import { CategoryPills } from "@/components/ar/StatusBadge";
 import { TargetDateEditor } from "@/components/ar/TargetDateEditor";
 import { Badge } from "@/components/ui/Badge";
-import { canAccessBatch, canManageBatches } from "@/lib/ar-access";
+import {
+  canAccessBatch,
+  canManageBatches,
+  practiceAssignees,
+} from "@/lib/ar-access";
 import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
 import { batchStats, daysBetween } from "@/lib/ar-stats";
 import { formatDate, formatUSD } from "@/lib/format";
-import { BatchStatus, Role } from "@/lib/generated/prisma/enums";
+import { BatchStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { formatDateIST } from "@/lib/timezone";
@@ -94,24 +98,34 @@ export default async function BatchDetailPage({
   const isManager = canManageBatches(user);
   const closed = batch.status === BatchStatus.CLOSED;
 
-  const [assignees, insurances] = await Promise.all([
-    isManager
-      ? prisma.user.findMany({
-          where: {
-            isActive: true,
-            role: { in: [Role.BILLER, Role.PROJECT_MANAGER, Role.OWNER] },
-          },
-          orderBy: { name: "asc" },
-          select: { id: true, name: true, role: true },
-        })
-      : Promise.resolve([]),
+  // Only people who can actually open this batch are offered as assignees.
+  const [assignees, insurances, providerRows] = await Promise.all([
+    isManager ? practiceAssignees(batch.practiceId) : Promise.resolve([]),
     prisma.arClaim.findMany({
       where: { batchId: batch.id },
       distinct: ["insuranceName"],
       select: { insuranceName: true },
       orderBy: { insuranceName: "asc" },
     }),
+    /**
+     * Provider filter options. An import fills `providerName`; a matched
+     * roster entry fills `renderingProvider`. The column shows whichever it
+     * has, so the filter has to offer both, merged.
+     */
+    prisma.arClaim.findMany({
+      where: { batchId: batch.id },
+      select: { renderingProvider: true, providerName: true },
+    }),
   ]);
+
+  const providerOptions = Array.from(
+    new Set(
+      providerRows
+        .flatMap((row) => [row.renderingProvider, row.providerName])
+        .map((name) => name?.trim())
+        .filter((name): name is string => Boolean(name)),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
 
   const daysOpen = daysBetween(batch.uploadedAt, batch.closedAt ?? new Date());
 
@@ -205,6 +219,7 @@ export default async function BatchDetailPage({
         batchClosed={closed}
         assignees={assignees}
         insuranceOptions={insurances.map((row) => row.insuranceName)}
+        providerOptions={providerOptions}
         initialTab={initialTab}
       />
     </div>

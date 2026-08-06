@@ -45,6 +45,9 @@ export const createClaimSchema = z.object({
   subscriberId: z.string().trim().max(80).optional(),
   patientId: z.string().trim().max(80).optional(),
   agingDays: z.coerce.number().int().min(0).optional(),
+  /** Optional visit identifiers some EHRs carry. Reference only. */
+  visitId: z.string().trim().max(80).optional(),
+  visitStatus: z.string().trim().max(80).optional(),
   assignedToId: z.string().min(1).optional(),
 });
 
@@ -88,6 +91,17 @@ export const listClaimsQuerySchema = z.object({
   agingBucket: z.enum(AGING_BUCKET_KEYS as [string, ...string[]]).optional(),
   /** Any of these buckets qualifies. */
   agingBuckets: csvList,
+  /**
+   * Provider names, matched against **either** provider field: an import
+   * fills providerName, a matched roster entry fills renderingProvider, and
+   * the claim list shows whichever it has.
+   */
+  providerNames: csvList,
+  /** Date-of-service range, inclusive at both ends. */
+  dosFrom: dateStringSchema.optional(),
+  dosTo: dateStringSchema.optional(),
+  /** Free text over patient name and CPT code. */
+  search: z.string().trim().max(100).optional(),
   overdue: z.enum(["true", "false"]).optional(),
   sort: z
     .enum(["aging", "patientName", "provider", "balance", "status"])

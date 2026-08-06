@@ -15,14 +15,16 @@ import {
   TaskTypeTag,
   type TaskTypeOption,
 } from "@/components/task/TaskFormFields";
-import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { isPageSize, Pagination } from "@/components/ui/Pagination";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/format";
+import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { NumericInput } from "@/components/ui/inputs/NumericInput";
 import { formatMinutes } from "@/lib/task-timer-serialize";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
@@ -36,7 +38,6 @@ type SortKey =
   | "createdAt"
   | "estimatedMinutes";
 
-const PAGE_SIZE = 50;
 
 /**
  * Logged time against its estimate.
@@ -95,6 +96,11 @@ export function TaskListClient({
   const [tasks, setTasks] = useState<TaskDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useLocalSetting(
+    "tasks.list.pageSize",
+    50,
+    isPageSize,
+  );
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<TaskDto | null>(null);
@@ -125,7 +131,7 @@ export function TaskListClient({
   const query = useMemo(() => {
     const params = new URLSearchParams({
       page: String(page),
-      pageSize: String(PAGE_SIZE),
+      pageSize: String(pageSize),
       sort: sortKey,
       direction: ascending ? "asc" : "desc",
     });
@@ -147,6 +153,7 @@ export function TaskListClient({
   }, [
     overdueOnly,
     page,
+    pageSize,
     sortKey,
     ascending,
     status,
@@ -187,7 +194,12 @@ export function TaskListClient({
     setSelected(new Set());
   }, [query]);
 
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+
+  // A bigger page can leave the cursor past the end of the list.
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
   const allSelected =
     tasks.length > 0 && tasks.every((task) => selected.has(task.id));
 
@@ -806,32 +818,19 @@ export function TaskListClient({
             </table>
           </div>
 
-          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-sm text-slate-600">
-            <span>
-              {total} task{total === 1 ? "" : "s"}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-                disabled={page <= 1}
-              >
-                Previous
-              </Button>
-              <span className="tabular-nums">
-                Page {page} of {pageCount}
-              </span>
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  setPage((current) => Math.min(pageCount, current + 1))
-                }
-                disabled={page >= pageCount}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={pageCount}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            noun="tasks"
+            filtered={Boolean(status || priority || practiceId || assignedToId || createdById || taskTypeId || tag || search || from || to || recurringOnly || overdueOnly)}
+          />
         </div>
       )}
 

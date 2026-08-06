@@ -4,25 +4,26 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AddTodoModal } from "@/components/todo/AddTodoModal";
 import { TodoEditPanel } from "@/components/todo/TodoEditPanel";
+import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { isPageSize, Pagination } from "@/components/ui/Pagination";
 import {
   DueDateFilters,
   dueDateParams,
   type DueQuickFilter,
 } from "@/components/ui/DueDateFilters";
-import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/format";
+import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { TodoPriority, TodoStatus } from "@/lib/generated/prisma/enums";
 import { TODO_STATUS_LABELS, type TodoDto } from "@/lib/todo-serialize";
 
 type SortKey = "dueDate" | "priority" | "title" | "status" | "assignedTo";
 
-const PAGE_SIZE = 50;
 
 const PRIORITY_VARIANT: Record<
   TodoPriority,
@@ -66,6 +67,11 @@ export function TodoListClient({
   const [todos, setTodos] = useState<TodoDto[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useLocalSetting(
+    "todos.list.pageSize",
+    50,
+    isPageSize,
+  );
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -90,7 +96,7 @@ export function TodoListClient({
   const query = useMemo(() => {
     const params = new URLSearchParams({
       page: String(page),
-      pageSize: String(PAGE_SIZE),
+      pageSize: String(pageSize),
       sort: sortKey,
       direction: ascending ? "asc" : "desc",
     });
@@ -112,6 +118,7 @@ export function TodoListClient({
     return params.toString();
   }, [
     page,
+    pageSize,
     sortKey,
     ascending,
     status,
@@ -151,7 +158,12 @@ export function TodoListClient({
     setSelected(new Set());
   }, [query]);
 
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+
+  // A bigger page can leave the cursor past the end of the list.
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
   const allSelected =
     todos.length > 0 && todos.every((todo) => selected.has(todo.id));
 
@@ -544,32 +556,27 @@ export function TodoListClient({
             </table>
           </div>
 
-          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-sm text-slate-600">
-            <span>
-              {total} to do{total === 1 ? "" : "s"}
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => setPage((current) => Math.max(1, current - 1))}
-                disabled={page <= 1}
-              >
-                Previous
-              </Button>
-              <span className="tabular-nums">
-                Page {page} of {pageCount}
-              </span>
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  setPage((current) => Math.min(pageCount, current + 1))
-                }
-                disabled={page >= pageCount}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={pageCount}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            noun="to dos"
+            filtered={Boolean(
+              status ||
+                practiceId ||
+                assignedToId ||
+                search ||
+                from ||
+                to ||
+                dueQuick !== "none",
+            )}
+          />
         </div>
       )}
 
