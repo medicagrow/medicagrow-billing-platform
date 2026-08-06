@@ -73,31 +73,55 @@ export default async function TeamTasksPage({
     selectedPracticeIds,
   });
 
-  const stats = await Promise.all(
-    members.map(async (member) => {
-      const base = { assignedToId: member.id, ...practiceFilter };
+  /**
+   * Two queries for the whole team, not five per person.
+   *
+   * The status counts are one `groupBy` over (assignee, status); overdue
+   * needs its own because it is a date condition rather than a status.
+   */
+  const memberIds = members.map((member) => member.id);
 
-      const [open, inProcess, hold, overdue, closed] = await Promise.all([
-        prisma.task.count({ where: { ...base, status: TaskStatus.OPEN } }),
-        prisma.task.count({ where: { ...base, status: TaskStatus.IN_PROCESS } }),
-        prisma.task.count({ where: { ...base, status: TaskStatus.HOLD } }),
-        prisma.task.count({
-          where: {
-            ...base,
-            dueDate: { lt: today },
-            // Matches GET /api/tasks?overdue=true, so the count and the link
-            // it points at cannot disagree.
-            status: {
-              in: [TaskStatus.OPEN, TaskStatus.IN_PROCESS, TaskStatus.HOLD],
+  const base = { assignedToId: { in: memberIds }, ...practiceFilter };
+
+  const [byStatus, overdueByMember] =
+    memberIds.length === 0
+      ? [[], []]
+      : await Promise.all([
+          prisma.task.groupBy({
+            by: ["assignedToId", "status"],
+            where: base,
+            _count: { _all: true },
+          }),
+          prisma.task.groupBy({
+            by: ["assignedToId"],
+            where: {
+              ...base,
+              dueDate: { lt: today },
+              // Matches GET /api/tasks?overdue=true, so the count and the link
+              // it points at cannot disagree.
+              status: {
+                in: [TaskStatus.OPEN, TaskStatus.IN_PROCESS, TaskStatus.HOLD],
+              },
             },
-          },
-        }),
-        prisma.task.count({ where: { ...base, status: TaskStatus.CLOSED } }),
-      ]);
+            _count: { _all: true },
+          }),
+        ]);
 
-      return { ...member, open, inProcess, hold, overdue, closed };
-    }),
-  );
+  const countOf = (memberId: string, status: TaskStatus) =>
+    byStatus.find(
+      (row) => row.assignedToId === memberId && row.status === status,
+    )?._count._all ?? 0;
+
+  const stats = members.map((member) => ({
+    ...member,
+    open: countOf(member.id, TaskStatus.OPEN),
+    inProcess: countOf(member.id, TaskStatus.IN_PROCESS),
+    hold: countOf(member.id, TaskStatus.HOLD),
+    overdue:
+      overdueByMember.find((row) => row.assignedToId === member.id)?._count
+        ._all ?? 0,
+    closed: countOf(member.id, TaskStatus.CLOSED),
+  }));
 
   return (
     <div className="mx-auto max-w-7xl">

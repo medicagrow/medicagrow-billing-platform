@@ -15,14 +15,17 @@ import {
   getTaskTypeProductivity,
 } from "@/lib/productivity/task-time";
 import {
+  forOneUser,
   practiceFilterFor,
   totalActivity,
   type ActivityDetailPage,
   type ActivityDetailProvider,
   type ActivitySummary,
   type BillerProductivity,
+  type ProductivityByUser,
   type ProductivityProvider,
   type ProductivityQuery,
+  type TeamProductivityQuery,
 } from "@/lib/productivity/types";
 
 export * from "@/lib/productivity/types";
@@ -58,14 +61,38 @@ const recentActivityProviders = [
   // getEligibilityRecentActivity,
 ];
 
-export async function getActivitySummaries(
-  query: ProductivityQuery,
-): Promise<ActivitySummary[]> {
+/**
+ * Every module's activity for a set of people, merged.
+ *
+ * The providers are batch-shaped, so this is a fixed number of queries no
+ * matter how many people are asked about — the whole point of the shape.
+ */
+export async function getTeamActivitySummaries(
+  query: TeamProductivityQuery,
+): Promise<ProductivityByUser> {
   const results = await Promise.all(
     moduleProviders.map((provider) => provider(query)),
   );
 
-  return results.flat();
+  const merged: ProductivityByUser = new Map();
+
+  for (const userId of query.userIds) {
+    merged.set(
+      userId,
+      results.flatMap((byUser) => byUser.get(userId) ?? []),
+    );
+  }
+
+  return merged;
+}
+
+/** The same thing for one person, so both paths share one implementation. */
+export async function getActivitySummaries(
+  query: ProductivityQuery,
+): Promise<ActivitySummary[]> {
+  const byUser = await getTeamActivitySummaries(forOneUser(query));
+
+  return byUser.get(query.userId) ?? [];
 }
 
 export async function getBillerProductivity(
@@ -83,10 +110,12 @@ export async function getBillerProductivity(
 
   if (!user) return null;
 
-  const [activities, totalLoggedMinutes, taskTypeBreakdown] = await Promise.all([
-    getActivitySummaries(query),
-    getLoggedMinutes(query),
-    getTaskTypeProductivity(query),
+  const scoped = forOneUser(query);
+
+  const [activities, loggedMinutes, taskTypes] = await Promise.all([
+    getTeamActivitySummaries(scoped),
+    getLoggedMinutes(scoped),
+    getTaskTypeProductivity(scoped),
   ]);
 
   return {
@@ -97,9 +126,9 @@ export async function getBillerProductivity(
       user.role === Role.OWNER
         ? ["All practices"]
         : user.practices.map((entry) => entry.practice.name),
-    activities,
-    totalLoggedMinutes,
-    taskTypeBreakdown,
+    activities: activities.get(user.id) ?? [],
+    totalLoggedMinutes: loggedMinutes.get(user.id) ?? 0,
+    taskTypeBreakdown: taskTypes.get(user.id) ?? [],
     dateRange: { from: query.from, to: query.to },
   };
 }
@@ -160,35 +189,38 @@ export async function getTeamProductivity(query: {
     },
   });
 
-  const entries = await Promise.all(
-    users.map(async (user) => {
-      const scoped = {
-        userId: user.id,
-        from: query.from,
-        to: query.to,
-        practiceId: query.practiceId,
-        practiceIds: query.selectedPracticeIds,
-      };
+  /**
+   * Three calls for the whole team, not three per person.
+   *
+   * This used to run every module's queries once per user — eleven round
+   * trips × fifteen people — which took roughly a second against a nearly
+   * empty database and got worse with every hire. The providers now take a
+   * list of user ids and return results keyed by user.
+   */
+  const scoped: TeamProductivityQuery = {
+    userIds: users.map((user) => user.id),
+    from: query.from,
+    to: query.to,
+    practiceId: query.practiceId,
+    practiceIds: query.selectedPracticeIds,
+  };
 
-      const [activities, totalLoggedMinutes, taskTypeBreakdown] =
-        await Promise.all([
-          getActivitySummaries(scoped),
-          getLoggedMinutes(scoped),
-          getTaskTypeProductivity(scoped),
-        ]);
+  const [activities, loggedMinutes, taskTypes] = await Promise.all([
+    getTeamActivitySummaries(scoped),
+    getLoggedMinutes(scoped),
+    getTaskTypeProductivity(scoped),
+  ]);
 
-      return {
-        userId: user.id,
-        userName: user.name,
-        role: user.role,
-        assignedPractices: user.practices.map((entry) => entry.practice.name),
-        activities,
-        totalLoggedMinutes,
-        taskTypeBreakdown,
-        dateRange: { from: query.from, to: query.to },
-      };
-    }),
-  );
+  const entries = users.map((user) => ({
+    userId: user.id,
+    userName: user.name,
+    role: user.role,
+    assignedPractices: user.practices.map((entry) => entry.practice.name),
+    activities: activities.get(user.id) ?? [],
+    totalLoggedMinutes: loggedMinutes.get(user.id) ?? 0,
+    taskTypeBreakdown: taskTypes.get(user.id) ?? [],
+    dateRange: { from: query.from, to: query.to },
+  }));
 
   return entries.sort(
     (a, b) => totalActivity(b.activities) - totalActivity(a.activities),

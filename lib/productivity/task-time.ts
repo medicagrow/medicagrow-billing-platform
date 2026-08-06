@@ -3,8 +3,8 @@ import { centsToDecimalString, toCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 import {
   practiceFilterFor,
-  type ProductivityQuery,
   type TaskTypeProductivity,
+  type TeamProductivityQuery,
 } from "@/lib/productivity/types";
 
 /**
@@ -14,53 +14,84 @@ import {
  * same rule the Time Logs module uses — so the hours on this page and the
  * hours on /productivity/time-logs are the same hours. A running timer has no
  * duration yet and is left out.
+ *
+ * Everything here is asked for the whole team at once: three queries for any
+ * number of people, rather than three each.
  */
 
 const UNTYPED = "No type";
 
-function sessionWhere(query: ProductivityQuery) {
+function sessionWhere(query: TeamProductivityQuery) {
   const practices = practiceFilterFor(query);
 
   return {
-    userId: query.userId,
+    userId: { in: query.userIds },
     startedAt: { gte: query.from, lte: query.to },
     stoppedAt: { not: null },
     ...(Object.keys(practices).length > 0 ? { task: practices } : {}),
   };
 }
 
-/** Every minute this person logged in the window. */
+/** Minutes logged in the window, per person. */
 export async function getLoggedMinutes(
-  query: ProductivityQuery,
-): Promise<number> {
-  const total = await prisma.taskTimeLog.aggregate({
+  query: TeamProductivityQuery,
+): Promise<Map<string, number>> {
+  const byUser = new Map<string, number>(
+    query.userIds.map((userId) => [userId, 0]),
+  );
+
+  if (query.userIds.length === 0) return byUser;
+
+  const totals = await prisma.taskTimeLog.groupBy({
+    by: ["userId"],
     where: sessionWhere(query),
     _sum: { durationMinutes: true },
   });
 
-  return total._sum.durationMinutes ?? 0;
+  for (const row of totals) {
+    byUser.set(row.userId, row._sum.durationMinutes ?? 0);
+  }
+
+  return byUser;
+}
+
+interface TypeAccumulator {
+  taskTypeId: string | null;
+  taskTypeName: string;
+  count: number;
+  taskCount: number;
+  /** Cents, so the money never touches a float. */
+  amountCents: bigint;
+  hasAmount: boolean;
 }
 
 /**
- * Closed tasks grouped by type, with the time logged against each.
+ * Closed tasks grouped by type, with the time logged against each, per person.
  *
  * Only types with a closed task in the window appear: the question this
- * answers is "what did they finish", and a type they merely spent time on
+ * answers is "what did they finish", and a type somebody merely spent time on
  * without closing anything belongs in the time report, not here. Its minutes
  * still count towards the total.
  */
 export async function getTaskTypeProductivity(
-  query: ProductivityQuery,
-): Promise<TaskTypeProductivity[]> {
+  query: TeamProductivityQuery,
+): Promise<Map<string, TaskTypeProductivity[]>> {
+  const byUser = new Map<string, TaskTypeProductivity[]>(
+    query.userIds.map((userId) => [userId, []]),
+  );
+
+  if (query.userIds.length === 0) return byUser;
+
   const [closed, sessions] = await Promise.all([
     prisma.task.findMany({
       where: {
-        completedById: query.userId,
+        completedById: { in: query.userIds },
         completedAt: { gte: query.from, lte: query.to },
         status: TaskStatus.CLOSED,
         ...practiceFilterFor(query),
       },
       select: {
+        completedById: true,
         taskTypeId: true,
         taskType: { select: { name: true } },
         productivityCount: true,
@@ -70,40 +101,34 @@ export async function getTaskTypeProductivity(
     prisma.taskTimeLog.findMany({
       where: sessionWhere(query),
       select: {
+        userId: true,
         durationMinutes: true,
-        task: {
-          select: { taskTypeId: true },
-        },
+        task: { select: { taskTypeId: true } },
       },
     }),
   ]);
 
-  const minutesByType = new Map<string, number>();
+  /** Minutes per (person, task type). */
+  const minutes = new Map<string, number>();
+  const minutesKey = (userId: string, taskTypeId: string | null) =>
+    `${userId}:${taskTypeId ?? "none"}`;
 
   for (const session of sessions) {
-    const key = session.task.taskTypeId ?? "none";
-    minutesByType.set(
-      key,
-      (minutesByType.get(key) ?? 0) + (session.durationMinutes ?? 0),
-    );
+    const key = minutesKey(session.userId, session.task.taskTypeId);
+    minutes.set(key, (minutes.get(key) ?? 0) + (session.durationMinutes ?? 0));
   }
 
-  interface Accumulator {
-    taskTypeId: string | null;
-    taskTypeName: string;
-    count: number;
-    taskCount: number;
-    /** Cents, so the money never touches a float. */
-    amountCents: bigint;
-    hasAmount: boolean;
-  }
-
-  const byType = new Map<string, Accumulator>();
+  /** Closed-task tallies per (person, task type). */
+  const tallies = new Map<string, Map<string, TypeAccumulator>>();
 
   for (const task of closed) {
+    // completedById is non-null for anything the query matched.
+    const userId = task.completedById!;
     const key = task.taskTypeId ?? "none";
 
-    const entry = byType.get(key) ?? {
+    const forUser = tallies.get(userId) ?? new Map<string, TypeAccumulator>();
+
+    const entry = forUser.get(key) ?? {
       taskTypeId: task.taskTypeId,
       taskTypeName: task.taskType?.name ?? UNTYPED,
       count: 0,
@@ -120,17 +145,32 @@ export async function getTaskTypeProductivity(
       entry.hasAmount = true;
     }
 
-    byType.set(key, entry);
+    forUser.set(key, entry);
+    tallies.set(userId, forUser);
   }
 
-  return Array.from(byType.entries())
-    .map(([key, entry]) => ({
-      taskTypeId: entry.taskTypeId,
-      taskTypeName: entry.taskTypeName,
-      count: entry.count,
-      taskCount: entry.taskCount,
-      totalAmount: entry.hasAmount ? centsToDecimalString(entry.amountCents) : null,
-      loggedMinutes: minutesByType.get(key) ?? 0,
-    }))
-    .sort((a, b) => b.loggedMinutes - a.loggedMinutes || b.taskCount - a.taskCount);
+  for (const userId of query.userIds) {
+    const forUser = tallies.get(userId);
+    if (!forUser) continue;
+
+    byUser.set(
+      userId,
+      Array.from(forUser.entries())
+        .map(([key, entry]) => ({
+          taskTypeId: entry.taskTypeId,
+          taskTypeName: entry.taskTypeName,
+          count: entry.count,
+          taskCount: entry.taskCount,
+          totalAmount: entry.hasAmount
+            ? centsToDecimalString(entry.amountCents)
+            : null,
+          loggedMinutes: minutes.get(minutesKey(userId, key === "none" ? null : key)) ?? 0,
+        }))
+        .sort(
+          (a, b) => b.loggedMinutes - a.loggedMinutes || b.taskCount - a.taskCount,
+        ),
+    );
+  }
+
+  return byUser;
 }

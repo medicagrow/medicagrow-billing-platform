@@ -33,7 +33,6 @@ export interface ClaimDto {
   ehrClaimStatus: string | null;
   ehrTags: string | null;
   lastWorkedAt: string | null;
-  lastWorkedByName: string | null;
 }
 
 type ClaimRow = {
@@ -65,7 +64,6 @@ type ClaimRow = {
   ehrTags: string | null;
   lastWorkedAt: Date | null;
   assignedTo?: { name: string } | null;
-  lastWorkedBy?: { name: string } | null;
 };
 
 const decimal = (value: unknown): string | null =>
@@ -101,11 +99,18 @@ export function toClaimDto(claim: ClaimRow): ClaimDto {
     ehrClaimStatus: claim.ehrClaimStatus,
     ehrTags: claim.ehrTags,
     lastWorkedAt: claim.lastWorkedAt?.toISOString() ?? null,
-    lastWorkedByName: claim.lastWorkedBy?.name ?? null,
   };
 }
 
+/**
+ * What a claim list needs joined.
+ *
+ * Deliberately one relation. Prisma's query compiler issues a round trip per
+ * included relation, so each one costs about as much as the claim query
+ * itself — and `lastWorkedBy` was being fetched for every row of every list
+ * while nothing rendered it. The claim detail page joins it in its own query,
+ * where it is actually shown.
+ */
 export const CLAIM_INCLUDE = {
   assignedTo: { select: { name: true } },
-  lastWorkedBy: { select: { name: true } },
 } as const;

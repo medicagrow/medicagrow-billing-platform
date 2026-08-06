@@ -1,3 +1,4 @@
+import { Prisma } from "@/lib/generated/prisma/client";
 import { BatchStatus, StatusCategory } from "@/lib/generated/prisma/enums";
 import { centsToDecimalString, toCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -32,13 +33,6 @@ export type InsuranceAgingByCategory = Record<
 >;
 
 type BucketKey = "bucket0_30" | "bucket31_60" | "bucket61_90" | "bucket90plus";
-
-function bucketFor(agingDays: number): BucketKey {
-  if (agingDays <= 30) return "bucket0_30";
-  if (agingDays <= 60) return "bucket31_60";
-  if (agingDays <= 90) return "bucket61_90";
-  return "bucket90plus";
-}
 
 interface Accumulator {
   claims: Record<BucketKey, number>;
@@ -79,6 +73,29 @@ function sortByBalance(rows: InsuranceAgingRow[]): InsuranceAgingRow[] {
   });
 }
 
+/** One (insurance, status, bucket) cell as Postgres returns it. */
+interface AgingGroupRow {
+  insuranceName: string;
+  statusCategory: StatusCategory;
+  bucket: BucketKey;
+  claims: number;
+  /** Numeric summed in the database and handed over as text, never a float. */
+  balance: string;
+}
+
+/**
+ * Insurance aging, grouped in the database.
+ *
+ * This used to read every claim in every open batch — around ten thousand rows
+ * on the current data — and bucket them in JavaScript, on a page that renders
+ * a table of maybe thirty numbers. The grouping is a `CASE` the database can
+ * do while it scans, so the result set is now the size of the table being
+ * drawn rather than the size of the claim book.
+ *
+ * Raw SQL because the buckets are ranges: Prisma's `groupBy` can group by a
+ * column but not by an expression over one. Column names stay camelCase and
+ * therefore quoted — Prisma maps table names, not columns.
+ */
 export async function insuranceAgingBreakdown({
   practiceIds,
   selectedPracticeId,
@@ -90,25 +107,43 @@ export async function insuranceAgingBreakdown({
   /** Narrows to one person's claims — a biller's view of their own book. */
   assignedToId?: string;
 }): Promise<InsuranceAgingByCategory> {
-  const claims = await prisma.arClaim.findMany({
-    where: {
-      ...(assignedToId ? { assignedToId } : {}),
-      batch: {
-        status: BatchStatus.OPEN,
-        ...(selectedPracticeId
-          ? { practiceId: selectedPracticeId }
-          : practiceIds === null
-            ? {}
-            : { practiceId: { in: practiceIds } }),
-      },
-    },
-    select: {
-      insuranceName: true,
-      agingDays: true,
-      balance: true,
-      statusCategory: true,
-    },
-  });
+  const conditions: Prisma.Sql[] = [
+    Prisma.sql`b.status = ${BatchStatus.OPEN}::"BatchStatus"`,
+  ];
+
+  if (selectedPracticeId) {
+    conditions.push(Prisma.sql`b."practiceId" = ${selectedPracticeId}`);
+  } else if (practiceIds !== null) {
+    // An empty list means "no practices", which must match nothing rather
+    // than degrade into no filter at all.
+    conditions.push(
+      practiceIds.length === 0
+        ? Prisma.sql`false`
+        : Prisma.sql`b."practiceId" IN (${Prisma.join(practiceIds)})`,
+    );
+  }
+
+  if (assignedToId) {
+    conditions.push(Prisma.sql`c."assignedToId" = ${assignedToId}`);
+  }
+
+  const rows = await prisma.$queryRaw<AgingGroupRow[]>`
+    SELECT
+      c."insuranceName" AS "insuranceName",
+      c."statusCategory" AS "statusCategory",
+      CASE
+        WHEN c."agingDays" <= 30 THEN 'bucket0_30'
+        WHEN c."agingDays" <= 60 THEN 'bucket31_60'
+        WHEN c."agingDays" <= 90 THEN 'bucket61_90'
+        ELSE 'bucket90plus'
+      END AS "bucket",
+      COUNT(*)::int AS "claims",
+      COALESCE(SUM(c.balance), 0)::text AS "balance"
+    FROM ar_claims c
+    JOIN ar_batches b ON b.id = c."batchId"
+    WHERE ${Prisma.join(conditions, " AND ")}
+    GROUP BY 1, 2, 3
+  `;
 
   const buckets: Record<CategoryFilter, Map<string, Accumulator>> = {
     ALL: new Map(),
@@ -117,22 +152,22 @@ export async function insuranceAgingBreakdown({
     GREEN: new Map(),
   };
 
-  for (const claim of claims) {
-    const key = bucketFor(claim.agingDays);
-    const cents = toCents(claim.balance.toString());
+  for (const row of rows) {
+    const cents = toCents(row.balance);
 
-    for (const scope of ["ALL", claim.statusCategory] as CategoryFilter[]) {
+    // Every cell counts once under its own status and once under ALL.
+    for (const scope of ["ALL", row.statusCategory] as CategoryFilter[]) {
       const map = buckets[scope];
-      let accumulator = map.get(claim.insuranceName);
+      let accumulator = map.get(row.insuranceName);
 
       if (!accumulator) {
         accumulator = emptyAccumulator();
-        map.set(claim.insuranceName, accumulator);
+        map.set(row.insuranceName, accumulator);
       }
 
-      accumulator.claims[key] += 1;
-      accumulator.cents[key] += cents;
-      accumulator.totalClaims += 1;
+      accumulator.claims[row.bucket] += row.claims;
+      accumulator.cents[row.bucket] += cents;
+      accumulator.totalClaims += row.claims;
       accumulator.totalCents += cents;
     }
   }

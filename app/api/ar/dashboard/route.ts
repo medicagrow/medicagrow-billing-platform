@@ -8,7 +8,7 @@ import { requireAuth } from "@/lib/api-helpers";
 import { accessiblePracticeIds } from "@/lib/ar-access";
 import { insuranceAgingBreakdown } from "@/lib/ar-insurance-aging";
 import { arBillerActivity, arSummary, billerProgress } from "@/lib/ar-summary";
-import { AGING_BUCKETS } from "@/lib/ar-aging";
+import { agingSummary } from "@/lib/ar-aging-summary";
 import { daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
@@ -74,8 +74,25 @@ export async function GET(request: NextRequest) {
     .map((practice) => practice.arBatches[0]?.id)
     .filter((id): id is string => Boolean(id));
 
-  const [byCategory, unassigned, overdue, agingRows, ownTotals] =
-    await Promise.all([
+  /**
+   * One wave, not five.
+   *
+   * Everything below needs only `openBatchIds`, which the practice query
+   * above already produced. Awaiting them in sequence — as this route used to
+   * — spent four round trips waiting where one would do, and every one of
+   * those is a trip to Mumbai.
+   */
+  const [
+    byCategory,
+    unassigned,
+    overdue,
+    aging,
+    ownTotals,
+    activity,
+    insuranceAging,
+    summary,
+    progressByBiller,
+  ] = await Promise.all([
       prisma.arClaim.groupBy({
         by: ["batchId", "statusCategory"],
         where: { batchId: { in: openBatchIds }, ...claimScope },
@@ -96,10 +113,9 @@ export async function GET(request: NextRequest) {
         },
         _count: { _all: true },
       }),
-      prisma.arClaim.findMany({
-        where: { batchId: { in: openBatchIds }, ...claimScope },
-        select: { agingDays: true, balance: true },
-      }),
+      // Bucketed by Postgres — this used to fetch every claim and filter
+      // the array five times.
+      agingSummary({ batchIds: openBatchIds, ...claimScope }),
       // A biller's batch totals are their own claims, not the batch's.
       isBiller
         ? prisma.arClaim.groupBy({
@@ -109,6 +125,17 @@ export async function GET(request: NextRequest) {
             _sum: { balance: true },
           })
         : Promise.resolve([]),
+      // The panel is about managing a team; a biller has none.
+      isBiller
+        ? Promise.resolve([])
+        : arBillerActivity({ practiceIds, selectedPracticeId }),
+      insuranceAgingBreakdown({
+        practiceIds,
+        selectedPracticeId,
+        ...claimScope,
+      }),
+      arSummary({ practiceIds, selectedPracticeId, ...claimScope }),
+      billerProgress({ practiceIds, selectedPracticeId }),
     ]);
 
   const countFor = (batchId: string, category: StatusCategory) =>
@@ -184,13 +211,6 @@ export async function GET(request: NextRequest) {
     ? rows.filter((row) => row.totalClaims > 0)
     : rows;
 
-  // Biller productivity — counted from the work-note audit trail, scoped to
-  // the practices in view so a PM never sees another practice's work.
-  // The panel is about managing a team; a biller has none.
-  const activity = isBiller
-    ? []
-    : await arBillerActivity({ practiceIds, selectedPracticeId });
-
   const buildProductivity = (
     progress: Awaited<ReturnType<typeof billerProgress>>,
   ) =>
@@ -212,25 +232,6 @@ export async function GET(request: NextRequest) {
       })
       .sort((a, b) => b.thisMonth - a.thisMonth);
 
-  // Aging breakdown across every open batch.
-  const aging = AGING_BUCKETS.map((bucket) => {
-    const matching = agingRows.filter(
-      (row) => row.agingDays >= bucket.min && row.agingDays <= bucket.max,
-    );
-
-    const total = matching.reduce(
-      (running, row) => running + Number(row.balance),
-      0,
-    );
-
-    return {
-      key: bucket.key,
-      label: bucket.label,
-      claimCount: matching.length,
-      balance: total.toFixed(2),
-    };
-  });
-
   // A biller totals only the practices they hold claims in.
   const totals = visibleRows.reduce(
     (running, row) => ({
@@ -241,17 +242,6 @@ export async function GET(request: NextRequest) {
     }),
     { balance: 0, red: 0, overdue: 0, noBatch: 0 },
   );
-
-  const insuranceAging = await insuranceAgingBreakdown({
-    practiceIds,
-    selectedPracticeId,
-    ...claimScope,
-  });
-
-  const [summary, progressByBiller] = await Promise.all([
-    arSummary({ practiceIds, selectedPracticeId, ...claimScope }),
-    billerProgress({ practiceIds, selectedPracticeId }),
-  ]);
 
   return NextResponse.json({
     summary: {

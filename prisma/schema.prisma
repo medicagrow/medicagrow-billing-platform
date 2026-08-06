@@ -288,6 +288,12 @@ model ArClaim {
   workNotes    ArWorkNote[]
 
   @@index([batchId])
+  /// The claim list's default read: one batch, oldest first. Without the
+  /// composite the planner scans agingDays and filters batchId, which is fine
+  /// at a few thousand claims and stops being fine well before the table is.
+  @@index([batchId, agingDays])
+  /// The status tabs, and the per-batch status roll-ups the dashboards take.
+  @@index([batchId, statusCategory])
   @@index([assignedToId, statusCategory])
   @@index([statusCategory])
   @@index([followUpDate])

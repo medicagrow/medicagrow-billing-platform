@@ -67,73 +67,76 @@ export default async function TeamTodosPage({
 
   const open = { status: { in: [TodoStatus.OPEN, TodoStatus.IN_PROCESS] } };
 
-  const stats = await Promise.all(
-    members.map(async (member) => {
-      const [dueToday, overdue, thisWeek, completedThisMonth, createdThisMonth] =
-        await Promise.all([
-          prisma.todo.count({
-            where: {
-              assignedToId: member.id,
-              dueDate: { gte: today, lte: endOfToday },
-              ...open,
-              ...practiceFilter,
-            },
+  /**
+   * Five queries for the whole team, not five per person.
+   *
+   * Each is a `groupBy` over the assignee, which is what the table is keyed
+   * on anyway. The date conditions differ between them, so they stay separate
+   * queries rather than becoming one grouped by status.
+   */
+  const memberIds = members.map((member) => member.id);
+
+  const forAll = { assignedToId: { in: memberIds }, ...practiceFilter };
+
+  const countBy = (where: Record<string, unknown>) =>
+    prisma.todo.groupBy({
+      by: ["assignedToId"],
+      where,
+      _count: { _all: true },
+    });
+
+  const [
+    dueTodayRows,
+    overdueRows,
+    thisWeekRows,
+    completedRows,
+    createdRows,
+  ] =
+    memberIds.length === 0
+      ? [[], [], [], [], []]
+      : await Promise.all([
+          countBy({ ...forAll, dueDate: { gte: today, lte: endOfToday }, ...open }),
+          countBy({ ...forAll, dueDate: { lt: today }, ...open }),
+          countBy({ ...forAll, dueDate: { gte: today, lt: endOfWeek }, ...open }),
+          countBy({
+            ...forAll,
+            status: TodoStatus.CLOSED,
+            completedAt: { gte: startOfMonth },
           }),
-          prisma.todo.count({
-            where: {
-              assignedToId: member.id,
-              dueDate: { lt: today },
-              ...open,
-              ...practiceFilter,
-            },
-          }),
-          prisma.todo.count({
-            where: {
-              assignedToId: member.id,
-              dueDate: { gte: today, lt: endOfWeek },
-              ...open,
-              ...practiceFilter,
-            },
-          }),
-          prisma.todo.count({
-            where: {
-              assignedToId: member.id,
-              status: TodoStatus.CLOSED,
-              completedAt: { gte: startOfMonth },
-              ...practiceFilter,
-            },
-          }),
-          prisma.todo.count({
-            where: {
-              assignedToId: member.id,
-              createdAt: { gte: startOfMonth },
-              ...practiceFilter,
-            },
-          }),
+          countBy({ ...forAll, createdAt: { gte: startOfMonth } }),
         ]);
 
-      // Completion rate compares what was closed against what landed on them
-      // this month — a rate over 100% just means they cleared a backlog.
-      const completionRate =
-        createdThisMonth === 0
-          ? completedThisMonth > 0
-            ? 100
-            : 0
-          : Math.min(
-              100,
-              Math.round((completedThisMonth / createdThisMonth) * 100),
-            );
+  const countFor = (
+    rows: { assignedToId: string; _count: { _all: number } }[],
+    memberId: string,
+  ) => rows.find((row) => row.assignedToId === memberId)?._count._all ?? 0;
 
-      return {
-        ...member,
-        dueToday,
-        overdue,
-        thisWeek,
-        completedThisMonth,
-        completionRate,
-      };
-    }),
-  );
+  const stats = members.map((member) => {
+    const completedThisMonth = countFor(completedRows, member.id);
+    const createdThisMonth = countFor(createdRows, member.id);
+
+    // Completion rate compares what was closed against what landed on them
+    // this month — a rate over 100% just means they cleared a backlog.
+    const completionRate =
+      createdThisMonth === 0
+        ? completedThisMonth > 0
+          ? 100
+          : 0
+        : Math.min(
+            100,
+            Math.round((completedThisMonth / createdThisMonth) * 100),
+          );
+
+    return {
+      ...member,
+      dueToday: countFor(dueTodayRows, member.id),
+      overdue: countFor(overdueRows, member.id),
+      thisWeek: countFor(thisWeekRows, member.id),
+      completedThisMonth,
+      createdThisMonth,
+      completionRate,
+    };
+  });
 
   return (
     <div className="mx-auto max-w-7xl">

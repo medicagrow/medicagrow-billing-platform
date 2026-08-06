@@ -58,12 +58,20 @@ needed.
    {
      "framework": "nextjs",
      "buildCommand": "prisma generate && next build",
-     "installCommand": "npm install"
+     "installCommand": "npm install",
+     "regions": ["bom1"]
    }
    ```
    `prisma generate` must run first: the client is generated into
    `lib/generated/prisma/`, which is gitignored, so a clean checkout has no
    client until it runs.
+
+   **`regions` must stay beside the database.** The Supabase project is in
+   `ap-south-1` (Mumbai) and `bom1` is Vercel's Mumbai region. Left unset,
+   functions default to `iad1` (Washington DC) and every database round trip
+   crosses the planet — roughly 200–250 ms instead of 5–10 ms. A page issuing
+   twenty queries is then four seconds of waiting rather than a fifth of a
+   second. **If the Supabase project ever moves, move this with it.**
 
 2. **Add the environment variables** from §1 before the first build. A build
    without `DATABASE_URL` fails at import time with a clear error.

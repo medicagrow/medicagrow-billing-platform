@@ -37,6 +37,28 @@ other medical billing companies.
   rather than being orphaned.
 - Work-note tables (`ar_work_notes`, `eob_work_notes`, `task_notes`) are
   **add-only**.
+- **Round trips are the cost, not queries.** The database answers in under
+  6 ms; a round trip to it is 5–10 ms co-located and 200 ms+ from the wrong
+  region. So the thing to count when a page is slow is **how many queries it
+  issues**, not how complex they are. Two rules follow, and both have been
+  broken before:
+  - **Never one query per row.** A report over N people runs a fixed number of
+    queries, not N × anything. Providers in [lib/productivity/](lib/productivity/)
+    take `userIds: string[]` and return results keyed by user for exactly
+    this reason; the single-user pages call the same functions with one id, so
+    there is one implementation rather than two that drift.
+  - **Independent work goes in one `Promise.all`.** Awaiting stages in
+    sequence spends a round trip waiting for each.
+- **Roll-ups belong in SQL.** [lib/ar-aging-summary.ts](lib/ar-aging-summary.ts)
+  and [lib/ar-insurance-aging.ts](lib/ar-insurance-aging.ts) bucket with a
+  `CASE` in raw SQL rather than fetching every claim and filtering arrays —
+  the result set should be the size of the table being drawn, not the size of
+  the claim book. Raw SQL because Prisma's `groupBy` groups by a column, not
+  by an expression over one; column names stay quoted since Prisma maps table
+  names but not columns. `scripts/test-aging-rollups.ts` checks both against
+  a JavaScript pass over the same rows.
+- **Vercel runs in `bom1`**, beside the Supabase project in `ap-south-1`.
+  Set in [vercel.json](vercel.json); if the database moves, move it too.
 - **Paginated lists share one component.**
   [components/ui/Pagination.tsx](components/ui/Pagination.tsx) renders the page
   numbers (first two, last two, current ± 1, "…" between — and a gap of exactly
@@ -397,6 +419,7 @@ built to take more modules without touching the routes or pages.
 
 ```bash
 npx tsx scripts/test-notes.ts      # generated note text, retired outcomes
+npx tsx scripts/test-aging-rollups.ts  # SQL roll-ups match a JS pass
 npx tsx scripts/test-my-queue.ts   # queue scoping (needs the dev server)
 npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
 ```

@@ -9,7 +9,7 @@ import { ProgressBar, progressTextClass } from "@/components/ui/ProgressBar";
 import { arBillerActivity, arSummary, billerProgress } from "@/lib/ar-summary";
 import { toDateParam } from "@/lib/productivity/date-ranges";
 import { insuranceAgingBreakdown } from "@/lib/ar-insurance-aging";
-import { AGING_BUCKETS } from "@/lib/ar-aging";
+import { agingSummary } from "@/lib/ar-aging-summary";
 import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
 import { daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
 import { formatUSD } from "@/lib/format";
@@ -123,7 +123,21 @@ export default async function ArDashboardPage({
     .map((practice) => practice.arBatches[0]?.id)
     .filter((id): id is string => Boolean(id));
 
-  const [byCategory, overdueGroups, agingRows, ownTotals] = await Promise.all([
+  /**
+   * One wave, not four. Everything here needs only `openBatchIds`, which the
+   * practice query above already produced; awaiting them in sequence spent
+   * three round trips waiting where one would do.
+   */
+  const [
+    byCategory,
+    overdueGroups,
+    aging,
+    ownTotals,
+    productivity,
+    insuranceAging,
+    summary,
+    progressByBiller,
+  ] = await Promise.all([
     prisma.arClaim.groupBy({
       by: ["batchId", "statusCategory"],
       where: { batchId: { in: openBatchIds }, ...claimScope },
@@ -139,10 +153,9 @@ export default async function ArDashboardPage({
       },
       _count: { _all: true },
     }),
-    prisma.arClaim.findMany({
-      where: { batchId: { in: openBatchIds }, ...claimScope },
-      select: { agingDays: true, balance: true },
-    }),
+    // Bucketed by Postgres — this used to fetch every claim in every open
+    // batch and filter the array five times.
+    agingSummary({ batchIds: openBatchIds, ...claimScope }),
     // A biller's batch totals are their own claims, not the batch's — the
     // batch columns count work that was never theirs.
     isBiller
@@ -153,6 +166,22 @@ export default async function ArDashboardPage({
           _sum: { balance: true },
         })
       : Promise.resolve([]),
+    // Same helper the API route uses, so the page and /api/ar/dashboard
+    // cannot disagree — and both are scoped to this user's practices.
+    isBiller
+      ? Promise.resolve([])
+      : arBillerActivity({ practiceIds, selectedPracticeId }),
+    insuranceAgingBreakdown({
+      practiceIds,
+      selectedPracticeId,
+      ...(isBiller ? { assignedToId: user.id } : {}),
+    }),
+    arSummary({
+      practiceIds,
+      selectedPracticeId,
+      ...(isBiller ? { assignedToId: user.id } : {}),
+    }),
+    billerProgress({ practiceIds, selectedPracticeId }),
   ]);
 
   const ownTotalFor = (batchId: string) =>
@@ -225,45 +254,17 @@ export default async function ArDashboardPage({
     Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
   );
 
-  // Same helper the API route uses, so the page and /api/ar/dashboard cannot
-  // disagree — and both are scoped to the practices this user manages.
-  const productivity = isBiller
-    ? []
-    : (await arBillerActivity({ practiceIds, selectedPracticeId })).sort(
-        (a, b) => b.thisMonth - a.thisMonth,
-      );
+  const rankedProductivity = [...productivity].sort(
+    (a, b) => b.thisMonth - a.thisMonth,
+  );
 
   const productivityFrom = toDateParam(startOfMonth);
   const productivityTo = toDateParam(today);
 
-  const aging = AGING_BUCKETS.map((bucket) => {
-    const matching = agingRows.filter(
-      (row) => row.agingDays >= bucket.min && row.agingDays <= bucket.max,
-    );
-    return {
-      key: bucket.key,
-      label: bucket.label,
-      claimCount: matching.length,
-      balance: matching.reduce((sum, row) => sum + Number(row.balance), 0),
-    };
-  });
-
-  const agingTotal = aging.reduce((sum, bucket) => sum + bucket.balance, 0);
-
-  const insuranceAging = await insuranceAgingBreakdown({
-    practiceIds,
-    selectedPracticeId,
-    ...(isBiller ? { assignedToId: user.id } : {}),
-  });
-
-  const [summary, progressByBiller] = await Promise.all([
-    arSummary({
-      practiceIds,
-      selectedPracticeId,
-      ...(isBiller ? { assignedToId: user.id } : {}),
-    }),
-    billerProgress({ practiceIds, selectedPracticeId }),
-  ]);
+  const agingTotal = aging.reduce(
+    (sum, bucket) => sum + Number(bucket.balance),
+    0,
+  );
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -463,8 +464,10 @@ export default async function ArDashboardPage({
                 <div
                   key={bucket.key}
                   className={BUCKET_COLORS[index]}
-                  style={{ width: `${(bucket.balance / agingTotal) * 100}%` }}
-                  title={`${bucket.label}: ${formatUSD(bucket.balance.toFixed(2))}`}
+                  style={{
+                    width: `${(Number(bucket.balance) / agingTotal) * 100}%`,
+                  }}
+                  title={`${bucket.label}: ${formatUSD(bucket.balance)}`}
                 />
               ))}
             </div>
@@ -478,7 +481,7 @@ export default async function ArDashboardPage({
                   <div>
                     <p className="text-xs text-slate-500">{bucket.label}</p>
                     <p className="text-sm font-semibold tabular-nums text-slate-900">
-                      {formatUSD(bucket.balance.toFixed(2))}
+                      {formatUSD(bucket.balance)}
                     </p>
                     <p className="text-[11px] text-slate-400">
                       {bucket.claimCount} claim
@@ -508,7 +511,7 @@ export default async function ArDashboardPage({
           </h3>
         </div>
 
-        {productivity.length === 0 ? (
+        {rankedProductivity.length === 0 ? (
           <div className="px-4 py-6">
             <EmptyState title="No billers yet" />
           </div>
@@ -525,7 +528,7 @@ export default async function ArDashboardPage({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {productivity.map((entry) => (
+              {rankedProductivity.map((entry) => (
                 <tr key={entry.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3">
                     <Link

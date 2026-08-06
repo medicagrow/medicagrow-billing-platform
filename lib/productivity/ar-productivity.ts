@@ -10,10 +10,13 @@ import {
 } from "@/lib/productivity/ar-activities";
 import {
   buildDrillDownUrl,
+  forOneUser,
   type ActivityDetailPage,
   type ActivitySummary,
   practiceFilterFor,
+  type ProductivityByUser,
   type ProductivityQuery,
+  type TeamProductivityQuery,
 } from "@/lib/productivity/types";
 
 /**
@@ -29,12 +32,12 @@ export {
   type ArActivityKey,
 } from "@/lib/productivity/ar-activities";
 
-/** Shared note filter: this user, this window, and whichever practices apply. */
-function noteWhere(query: ProductivityQuery) {
+/** Shared note filter: these users, this window, and whichever practices apply. */
+function noteWhere(query: TeamProductivityQuery) {
   const practices = practiceFilterFor(query);
 
   return {
-    workedById: query.userId,
+    workedById: { in: query.userIds },
     workedAt: { gte: query.from, lte: query.to },
     ...(Object.keys(practices).length > 0
       ? { claim: { batch: practices } }
@@ -42,94 +45,142 @@ function noteWhere(query: ProductivityQuery) {
   };
 }
 
-/** Distinct claims touched, plus the balance they represent. */
-async function distinctClaims(
-  query: ProductivityQuery,
-  extra: Record<string, unknown> = {},
-): Promise<{ count: number; totalValue: string }> {
-  const notes = await prisma.arWorkNote.findMany({
-    where: { ...noteWhere(query), ...extra },
-    select: { claimId: true, claim: { select: { balance: true } } },
-  });
+/** Running totals for one person, filled in as their notes are read. */
+interface ArTally {
+  /** Claim id → its balance in cents. A claim worked twice counts once. */
+  claimsWorked: Map<string, bigint>;
+  movedToGreen: Map<string, bigint>;
+  denialsWorked: number;
+  resubmitted: number;
+  appealsSubmitted: number;
+  escalated: number;
+}
 
-  const seen = new Map<string, bigint>();
+const emptyTally = (): ArTally => ({
+  claimsWorked: new Map(),
+  movedToGreen: new Map(),
+  denialsWorked: 0,
+  resubmitted: 0,
+  appealsSubmitted: 0,
+  escalated: 0,
+});
+
+function sumCents(balances: Map<string, bigint>): string {
+  let cents = 0n;
+  for (const value of balances.values()) cents += value;
+  return centsToDecimalString(cents);
+}
+
+/**
+ * Every AR figure for a whole team, in **one query**.
+ *
+ * This used to be six queries per person: two `findMany`s that fetched notes
+ * and deduplicated claims in JS, plus four `count`s. The four counts are
+ * derivable from the same rows the first two already fetched, so reading the
+ * window once and tallying it is strictly less work than it was — and it is
+ * one round trip instead of six per head.
+ *
+ * The counts cannot be pushed into SQL as a `groupBy` without giving up the
+ * distinct-claim ones: "claims worked" is distinct claims, and their value is
+ * the sum over *distinct* claims, which needs the rows.
+ */
+export async function getArProductivity(
+  query: TeamProductivityQuery,
+): Promise<ProductivityByUser> {
+  const notes =
+    query.userIds.length === 0
+      ? []
+      : await prisma.arWorkNote.findMany({
+          where: noteWhere(query),
+          select: {
+            workedById: true,
+            claimId: true,
+            outcomeType: true,
+            statusChangedTo: true,
+            statusCategoryChangedTo: true,
+            claim: { select: { balance: true } },
+          },
+        });
+
+  const tallies = new Map<string, ArTally>();
 
   for (const note of notes) {
-    if (!seen.has(note.claimId)) {
-      seen.set(note.claimId, toCents(note.claim.balance.toString()));
+    let tally = tallies.get(note.workedById);
+
+    if (!tally) {
+      tally = emptyTally();
+      tallies.set(note.workedById, tally);
+    }
+
+    const cents = toCents(note.claim.balance.toString());
+
+    if (!tally.claimsWorked.has(note.claimId)) {
+      tally.claimsWorked.set(note.claimId, cents);
+    }
+
+    if (note.statusCategoryChangedTo === StatusCategory.GREEN) {
+      if (!tally.movedToGreen.has(note.claimId)) {
+        tally.movedToGreen.set(note.claimId, cents);
+      }
+    }
+
+    if (note.outcomeType === OutcomeType.DENIED) tally.denialsWorked += 1;
+    if (RESUBMITTED_STATUSES.includes(note.statusChangedTo)) {
+      tally.resubmitted += 1;
+    }
+    if (APPEAL_STATUSES.includes(note.statusChangedTo)) {
+      tally.appealsSubmitted += 1;
+    }
+    if (note.statusCategoryChangedTo === StatusCategory.BLUE) {
+      tally.escalated += 1;
     }
   }
 
-  let cents = 0n;
-  for (const value of seen.values()) cents += value;
+  const byUser: ProductivityByUser = new Map();
 
-  return { count: seen.size, totalValue: centsToDecimalString(cents) };
-}
+  // Everyone asked for gets a row, so a quiet week reads as zeroes rather
+  // than as a missing person.
+  for (const userId of query.userIds) {
+    const tally = tallies.get(userId) ?? emptyTally();
 
-export async function getArProductivity(
-  query: ProductivityQuery,
-): Promise<ActivitySummary[]> {
-  const where = noteWhere(query);
-
-  const [
-    claimsWorked,
-    movedToGreen,
-    denialsWorked,
-    resubmitted,
-    appealsSubmitted,
-    escalated,
-  ] = await Promise.all([
-    distinctClaims(query),
-    distinctClaims(query, { statusCategoryChangedTo: StatusCategory.GREEN }),
-    prisma.arWorkNote.count({
-      where: { ...where, outcomeType: OutcomeType.DENIED },
-    }),
-    prisma.arWorkNote.count({
-      where: { ...where, statusChangedTo: { in: RESUBMITTED_STATUSES } },
-    }),
-    prisma.arWorkNote.count({
-      where: { ...where, statusChangedTo: { in: APPEAL_STATUSES } },
-    }),
-    prisma.arWorkNote.count({
-      where: { ...where, statusCategoryChangedTo: StatusCategory.BLUE },
-    }),
-  ]);
-
-  const summary = (
-    key: ArActivityKey,
-    count: number,
-    totalValue?: string,
-  ): ActivitySummary => ({
-    module: "AR",
-    key,
-    label: AR_ACTIVITY_LABELS[key],
-    count,
-    totalValue,
-    drillDownUrl: buildDrillDownUrl(
-      query.userId,
+    const summary = (
+      key: ArActivityKey,
+      count: number,
+      totalValue?: string,
+    ): ActivitySummary => ({
+      module: "AR",
       key,
-      query.from,
-      query.to,
-      query.practiceId,
-    ),
-  });
+      label: AR_ACTIVITY_LABELS[key],
+      count,
+      totalValue,
+      drillDownUrl: buildDrillDownUrl(
+        userId,
+        key,
+        query.from,
+        query.to,
+        query.practiceId,
+      ),
+    });
 
-  return [
-    summary(
-      AR_ACTIVITIES.CLAIMS_WORKED,
-      claimsWorked.count,
-      claimsWorked.totalValue,
-    ),
-    summary(
-      AR_ACTIVITIES.MOVED_TO_GREEN,
-      movedToGreen.count,
-      movedToGreen.totalValue,
-    ),
-    summary(AR_ACTIVITIES.DENIALS_WORKED, denialsWorked),
-    summary(AR_ACTIVITIES.RESUBMITTED, resubmitted),
-    summary(AR_ACTIVITIES.APPEALS_SUBMITTED, appealsSubmitted),
-    summary(AR_ACTIVITIES.ESCALATED_TO_OFFICE, escalated),
-  ];
+    byUser.set(userId, [
+      summary(
+        AR_ACTIVITIES.CLAIMS_WORKED,
+        tally.claimsWorked.size,
+        sumCents(tally.claimsWorked),
+      ),
+      summary(
+        AR_ACTIVITIES.MOVED_TO_GREEN,
+        tally.movedToGreen.size,
+        sumCents(tally.movedToGreen),
+      ),
+      summary(AR_ACTIVITIES.DENIALS_WORKED, tally.denialsWorked),
+      summary(AR_ACTIVITIES.RESUBMITTED, tally.resubmitted),
+      summary(AR_ACTIVITIES.APPEALS_SUBMITTED, tally.appealsSubmitted),
+      summary(AR_ACTIVITIES.ESCALATED_TO_OFFICE, tally.escalated),
+    ]);
+  }
+
+  return byUser;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -183,7 +234,7 @@ export async function getArActivityDetail(
   const filter = detailFilter(query.activityKey);
   if (filter === null) return null;
 
-  const where = { ...noteWhere(query), ...filter };
+  const where = { ...noteWhere(forOneUser(query)), ...filter };
 
   const [notes, total] = await Promise.all([
     prisma.arWorkNote.findMany({
@@ -264,7 +315,7 @@ export async function getArRecentActivity(
   limit = 20,
 ) {
   const notes = await prisma.arWorkNote.findMany({
-    where: noteWhere(query),
+    where: noteWhere(forOneUser(query)),
     orderBy: { workedAt: "desc" },
     take: limit,
     select: {

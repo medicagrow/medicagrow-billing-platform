@@ -5,7 +5,7 @@ import {
   requireRole,
   zodErrorResponse,
 } from "@/lib/api-helpers";
-import { canAccessPractice } from "@/lib/ar-access";
+import { accessiblePracticeIds } from "@/lib/ar-access";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { bulkAssignEobSchema } from "@/lib/validations/eob";
@@ -55,13 +55,17 @@ export async function POST(request: NextRequest) {
     return apiErrorResponse("No matching entries found.", 404);
   }
 
-  // Every affected practice must be one the caller can reach.
-  const practiceIds = Array.from(
-    new Set(entries.map((entry) => entry.batch.practiceId)),
-  );
+  /**
+   * Every affected practice must be one the caller can reach — checked once
+   * against the caller's practice list rather than once per distinct
+   * practice, awaited one after another.
+   */
+  const accessible = await accessiblePracticeIds(session!.user);
 
-  for (const practiceId of practiceIds) {
-    if (!(await canAccessPractice(session!.user, practiceId))) {
+  if (accessible !== null) {
+    const allowed = new Set(accessible);
+
+    if (entries.some((entry) => !allowed.has(entry.batch.practiceId))) {
       return apiErrorResponse(
         "One or more entries belong to a practice you cannot access.",
         403,

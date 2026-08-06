@@ -77,6 +77,37 @@ export interface ProductivityQuery {
 }
 
 /**
+ * The same question asked for a whole team at once.
+ *
+ * Every provider is written in this shape and the single-user path calls it
+ * with one id, so there is one implementation rather than two that can drift.
+ * It exists because the team report used to run each module's queries once per
+ * person: eleven round trips × fifteen people is a page that takes seconds
+ * before the database has done any real work.
+ */
+export interface TeamProductivityQuery {
+  userIds: string[];
+  from: Date;
+  to: Date;
+  practiceId?: string;
+  practiceIds?: string[];
+}
+
+/** Results keyed by user. A user with no activity may be absent. */
+export type ProductivityByUser = Map<string, ActivitySummary[]>;
+
+/** Narrows a team query to one person, for the single-user pages. */
+export function forOneUser(query: ProductivityQuery): TeamProductivityQuery {
+  return {
+    userIds: [query.userId],
+    from: query.from,
+    to: query.to,
+    practiceId: query.practiceId,
+    practiceIds: query.practiceIds,
+  };
+}
+
+/**
  * The `{ practiceId: … }` fragment for a query's practice selection, or an
  * empty object for "every practice this caller can see". One place, so the
  * single-select and multi-select filters cannot drift apart.
@@ -94,10 +125,14 @@ export function practiceFilterFor(query: {
   return {};
 }
 
-/** Every module's productivity function has this shape. */
+/**
+ * Every module's productivity function has this shape: given a set of people
+ * and a window, return each person's activity in a **fixed** number of
+ * queries — never one query per person.
+ */
 export type ProductivityProvider = (
-  query: ProductivityQuery,
-) => Promise<ActivitySummary[]>;
+  query: TeamProductivityQuery,
+) => Promise<ProductivityByUser>;
 
 /** A named slice of a drill-down, e.g. completions per task type. */
 export interface ActivityBreakdown {

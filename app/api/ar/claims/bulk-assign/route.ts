@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { BatchStatus, Role } from "@/lib/generated/prisma/enums";
 import { apiErrorResponse, requireRole, zodErrorResponse } from "@/lib/api-helpers";
-import { canAccessBatch } from "@/lib/ar-access";
+import { accessiblePracticeIds } from "@/lib/ar-access";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { bulkAssignSchema } from "@/lib/validations/ar";
@@ -42,18 +42,30 @@ export async function POST(request: NextRequest) {
 
   const claims = await prisma.arClaim.findMany({
     where: { id: { in: claimIds } },
-    select: { id: true, batchId: true, batch: { select: { status: true } } },
+    select: {
+      id: true,
+      batchId: true,
+      batch: { select: { status: true, practiceId: true } },
+    },
   });
 
   if (claims.length === 0) {
     return apiErrorResponse("No matching claims found.", 404);
   }
 
-  // Every affected batch must be open and within the caller's practices.
-  const batchIds = Array.from(new Set(claims.map((claim) => claim.batchId)));
+  /**
+   * Every affected batch must be open and within the caller's practices.
+   *
+   * The practice ids come back with the claims, so this is one lookup of what
+   * the caller may reach rather than two queries per distinct batch, awaited
+   * one after another.
+   */
+  const accessible = await accessiblePracticeIds(session!.user);
 
-  for (const batchId of batchIds) {
-    if (!(await canAccessBatch(session!.user, batchId))) {
+  if (accessible !== null) {
+    const allowed = new Set(accessible);
+
+    if (claims.some((claim) => !allowed.has(claim.batch.practiceId))) {
       return apiErrorResponse(
         "One or more claims belong to a practice you cannot access.",
         403,

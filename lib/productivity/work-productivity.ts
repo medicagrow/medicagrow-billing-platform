@@ -9,6 +9,8 @@ import {
 import {
   buildDrillDownUrl,
   practiceFilterFor,
+  type ProductivityByUser,
+  type TeamProductivityQuery,
   type ActivityBreakdown,
   type ActivityDetailPage,
   type ActivitySummary,
@@ -23,37 +25,70 @@ import {
  * Completion is attributed to whoever closed the item, not the assignee.
  */
 export async function getWorkProductivity(
-  query: ProductivityQuery,
-): Promise<ActivitySummary[]> {
+  query: TeamProductivityQuery,
+): Promise<ProductivityByUser> {
   const window = {
-    completedById: query.userId,
+    completedById: { in: query.userIds },
     completedAt: { gte: query.from, lte: query.to },
     ...practiceFilterFor(query),
   };
 
-  const [tasksCompleted, todosCompleted] = await Promise.all([
-    prisma.task.count({ where: { ...window, status: TaskStatus.CLOSED } }),
-    prisma.todo.count({ where: { ...window, status: TodoStatus.CLOSED } }),
-  ]);
+  /**
+   * Two `groupBy`s for the whole team rather than two `count`s each. The
+   * grouping key is who closed the item, which is exactly what the report is
+   * attributing the completion to.
+   */
+  const [tasksByUser, todosByUser] =
+    query.userIds.length === 0
+      ? [[], []]
+      : await Promise.all([
+          prisma.task.groupBy({
+            by: ["completedById"],
+            where: { ...window, status: TaskStatus.CLOSED },
+            _count: { _all: true },
+          }),
+          prisma.todo.groupBy({
+            by: ["completedById"],
+            where: { ...window, status: TodoStatus.CLOSED },
+            _count: { _all: true },
+          }),
+        ]);
 
-  const summary = (key: WorkActivityKey, count: number): ActivitySummary => ({
-    module: key === WORK_ACTIVITIES.TASKS_COMPLETED ? "TASK" : "TODO",
-    key,
-    label: WORK_ACTIVITY_LABELS[key],
-    count,
-    drillDownUrl: buildDrillDownUrl(
-      query.userId,
+  const countFor = (
+    groups: { completedById: string | null; _count: { _all: number } }[],
+    userId: string,
+  ) => groups.find((row) => row.completedById === userId)?._count._all ?? 0;
+
+  const byUser: ProductivityByUser = new Map();
+
+  for (const userId of query.userIds) {
+    const summary = (key: WorkActivityKey, count: number): ActivitySummary => ({
+      module: key === WORK_ACTIVITIES.TASKS_COMPLETED ? "TASK" : "TODO",
       key,
-      query.from,
-      query.to,
-      query.practiceId,
-    ),
-  });
+      label: WORK_ACTIVITY_LABELS[key],
+      count,
+      drillDownUrl: buildDrillDownUrl(
+        userId,
+        key,
+        query.from,
+        query.to,
+        query.practiceId,
+      ),
+    });
 
-  return [
-    summary(WORK_ACTIVITIES.TASKS_COMPLETED, tasksCompleted),
-    summary(WORK_ACTIVITIES.TODOS_COMPLETED, todosCompleted),
-  ];
+    byUser.set(userId, [
+      summary(
+        WORK_ACTIVITIES.TASKS_COMPLETED,
+        countFor(tasksByUser, userId),
+      ),
+      summary(
+        WORK_ACTIVITIES.TODOS_COMPLETED,
+        countFor(todosByUser, userId),
+      ),
+    ]);
+  }
+
+  return byUser;
 }
 
 export interface WorkActivityRow {
