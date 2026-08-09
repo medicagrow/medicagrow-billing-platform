@@ -81,6 +81,14 @@ other medical billing companies.
   other filter moves. The encoding is in
   [lib/filter-params.ts](lib/filter-params.ts), free of React so it can be
   tested and read by server components.
+  - **A hardcoded back link undoes all of this.** The browser's back button
+    restores the query string; `<Link href="/ar/batches/123">` does not. Detail
+    pages use [components/ui/BackLink.tsx](components/ui/BackLink.tsx), which
+    calls `router.back()` when there is same-origin history and falls back to
+    its `href` when someone arrived from a bookmark.
+  - **Do not clamp the page before the first response.** `total` is 0 until
+    it lands, so the page count is 1 and any restored page number would be
+    thrown away. Every clamp waits on `loading`.
   - Page size is the exception that is **both**: the URL wins when it names
     one, so a shared link opens the view the sender saw, and `useLocalSetting`
     still remembers the choice for the next visit.
@@ -182,6 +190,13 @@ other and must not be merged.
   points people actually hit: `GET /api/todos/today`,
   `GET /api/tasks/my-tasks`, and the dashboard fetch in
   `app/(platform)/page.tsx`. Add it to any new entry point that lists work.
+- **"Daily" means every business day.** `nextBusinessDay()` in
+  [lib/task/recurrence-config.ts](lib/task/recurrence-config.ts) skips Saturday
+  and Sunday, and a series set up over a weekend starts on the Monday. Weekly
+  and bi-weekly already name their days and monthly lands on a date, so daily
+  was the one frequency that had to be told. `scripts/fix-daily-recurring-weekends.ts`
+  moves any weekend occurrence left by the old rule onto the following Monday —
+  OPEN instances only, since a closed one is a record of work that happened.
 - **A recurring parent never appears in a task list.** `GET /api/tasks`
   excludes `isRecurring && parentTaskId === null`; "Recurring only" narrows to
   `parentTaskId != null` rather than adding an `OR`, which used to overwrite
@@ -451,6 +466,7 @@ npx tsx scripts/test-notes.ts      # generated note text, retired outcomes
 npx tsx scripts/test-aging-rollups.ts  # SQL roll-ups match a JS pass
 npx tsx scripts/test-lazy-schedule.ts  # sweep rate limit, per scope
 npx tsx scripts/test-filter-params.ts  # URL filter round trip, foreign params
+npx tsx scripts/test-visit-status.ts   # the filter's options query, on real batches
 npx tsx scripts/test-my-queue.ts   # queue scoping (needs the dev server)
 npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
 ```

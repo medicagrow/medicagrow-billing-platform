@@ -12,6 +12,7 @@ import {
 import { StatusBadge } from "@/components/ar/StatusBadge";
 import { WorkNoteForm } from "@/components/ar/WorkNoteForm";
 import { Badge } from "@/components/ui/Badge";
+import { BackLink } from "@/components/ui/BackLink";
 import { EmptyState } from "@/components/ui/Card";
 import { canAccessBatch, canManageBatches } from "@/lib/ar-access";
 import { OUTCOME_LABELS } from "@/lib/ar-outcomes";
@@ -185,12 +186,13 @@ export default async function ClaimDetailPage({
             {claim.claimNumber ? ` · Claim #${claim.claimNumber}` : ""}
           </p>
         </div>
-        <Link
-          href={`/ar/batches/${claim.batch.id}`}
-          className="text-sm font-medium text-brand-700 hover:text-brand-800"
-        >
+        {/*
+          Goes back rather than to a bare batch URL — the filters the person
+          had applied live in that URL's query string.
+        */}
+        <BackLink href={`/ar/batches/${claim.batch.id}`}>
           ← Back to batch
-        </Link>
+        </BackLink>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-5">

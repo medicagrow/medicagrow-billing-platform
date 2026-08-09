@@ -15,23 +15,38 @@ export type FilterShape = Record<string, FilterValue>;
 /**
  * One value as the URL carries it, or null to leave it out.
  *
- * A value equal to its default carries no information, so it is omitted. That
- * is what makes an empty query string mean "nothing filtered", and what lets
- * "clear filters" be nothing more than dropping the params.
+ * A value equal to its default carries no information, so it is omitted —
+ * that is what makes an empty query string mean "nothing filtered", and what
+ * lets "clear filters" be nothing more than dropping the params.
+ *
+ * Anything *not* equal to its default is written, **including an empty one**.
+ * Some lists are opened from a link that seeds a filter — the Team page sends
+ * you to `/tasks/list?assignedToId=…` — and that seed becomes the default.
+ * Clearing such a filter has to leave a mark in the URL (`assignedToId=`),
+ * or reading it back would restore the seed and the filter would refuse to
+ * clear.
  */
 export function encodeFilterValue(
   value: FilterValue,
   fallback: FilterValue,
 ): string | null {
   if (Array.isArray(value)) {
-    return value.length === 0 ? null : value.join(",");
+    const fallbackList = Array.isArray(fallback) ? fallback : [];
+    const same =
+      value.length === fallbackList.length &&
+      value.every((entry, index) => entry === fallbackList[index]);
+
+    // An empty list that differs from its seed still needs to be recorded.
+    return same ? null : value.join(",");
   }
 
-  if (typeof value === "boolean") return value ? "true" : null;
+  if (typeof value === "boolean") {
+    return value === fallback ? null : value ? "true" : "false";
+  }
 
   const text = String(value);
 
-  return text === "" || text === String(fallback) ? null : text;
+  return text === String(fallback) ? null : text;
 }
 
 /** Reads one value back, using the default to know what shape to expect. */
@@ -39,7 +54,7 @@ export function decodeFilterValue(
   raw: string | null,
   fallback: FilterValue,
 ): FilterValue {
-  if (raw === null) return Array.isArray(fallback) ? [] : fallback;
+  if (raw === null) return Array.isArray(fallback) ? [...fallback] : fallback;
 
   if (Array.isArray(fallback)) {
     return raw

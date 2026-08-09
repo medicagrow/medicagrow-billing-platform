@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { CopyNoteButton } from "@/components/ar/CopyNoteButton";
 import { StatusBadge } from "@/components/ar/StatusBadge";
 import { EobNoteForm } from "@/components/eob/EobNoteForm";
+import { BackLink } from "@/components/ui/BackLink";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/Card";
 import { canAccessPractice, canManageBatches } from "@/lib/ar-access";
@@ -95,12 +96,8 @@ export default async function EobEntryPage({
             {entry.claimNumber ? ` · Claim #${entry.claimNumber}` : ""}
           </p>
         </div>
-        <Link
-          href="/eob"
-          className="text-sm font-medium text-brand-700 hover:text-brand-800"
-        >
-          ← All denials & rejections
-        </Link>
+        {/* Back to the filtered list, not to a bare /eob. */}
+        <BackLink href="/eob">← All denials &amp; rejections</BackLink>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-5">

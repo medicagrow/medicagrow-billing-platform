@@ -273,8 +273,13 @@ export function TaskListClient({
   // A bigger page, or a filter that shortened the list, can leave the cursor
   // past the end of it.
   useEffect(() => {
+    // Only once a response has landed. Before the first fetch `total` is 0,
+    // so pageCount is 1 — clamping then would throw away the page number the
+    // URL just restored, which is exactly what a back navigation depends on.
+    if (loading) return;
+
     if (page > pageCount) setFilters({ page: pageCount });
-  }, [page, pageCount, setFilters]);
+  }, [loading, page, pageCount, setFilters]);
   const allSelected =
     tasks.length > 0 && tasks.every((task) => selected.has(task.id));
 

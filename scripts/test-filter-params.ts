@@ -158,6 +158,49 @@ console.log("\n=== knowing when to offer 'clear filters' ===");
   );
 }
 
+console.log("\n=== a seeded default can still be cleared ===");
+{
+  /**
+   * Some lists open from a link that names a filter — the Team page sends you
+   * to /tasks/list?assignedToId=X — and that seed becomes the default. If
+   * clearing it wrote nothing to the URL, reading the URL back would restore
+   * the seed and the filter would refuse to clear.
+   */
+  const seeded = { assignedToId: "user-1", status: "CLOSED", tags: ["a"] };
+
+  check(
+    "clearing a seeded string is recorded",
+    encodeFilterValue("", "user-1") === "",
+  );
+  check("clearing a seeded list is recorded", encodeFilterValue([], ["a"]) === "");
+  check(
+    "turning off a seeded boolean is recorded",
+    encodeFilterValue(false, true) === "false",
+  );
+  check(
+    "a value still at its seed stays out",
+    encodeFilterValue("user-1", "user-1") === null,
+  );
+
+  const cleared = { assignedToId: "", status: "", tags: [] as string[] };
+  const query = filterQuery(cleared, seeded);
+  const back = parseFilters(new URLSearchParams(query), seeded);
+
+  check(
+    "the cleared state survives a round trip",
+    back.assignedToId === "" && back.status === "" && back.tags.length === 0,
+    query,
+  );
+
+  // An untouched seeded list still reads back as the seed.
+  const untouched = parseFilters(new URLSearchParams(""), seeded);
+  check(
+    "an omitted seeded list reads back as its seed",
+    untouched.tags.join(",") === "a",
+    untouched.tags.join(","),
+  );
+}
+
 console.log(`\n${"=".repeat(60)}`);
 console.log(fail > 0 ? `PASSED ${pass}   FAILED ${fail}` : `ALL ${pass} CHECKS PASSED`);
 console.log("=".repeat(60));

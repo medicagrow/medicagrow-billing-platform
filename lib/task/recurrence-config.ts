@@ -105,6 +105,28 @@ export function parseRecurringConfig(value: unknown): RecurringConfig | null {
  * which handles the wrap across a week boundary without special cases. Their
  * only difference is that bi-weekly skips a week once it wraps.
  */
+/** Saturday or Sunday, in UTC — the days nobody is working billing. */
+export function isWeekend(date: Date): boolean {
+  const day = date.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+/**
+ * The next working day after `date`.
+ *
+ * "Daily" means every business day: a queue that fills up over a weekend
+ * nobody worked is two tasks that were never going to be done, and the
+ * Monday catch-up then looks like a backlog rather than a fresh day.
+ */
+export function nextBusinessDay(date: Date): Date {
+  const next = new Date(date.getTime());
+
+  next.setUTCDate(next.getUTCDate() + 1);
+  while (isWeekend(next)) next.setUTCDate(next.getUTCDate() + 1);
+
+  return next;
+}
+
 export function nextOccurrence(
   config: RecurringConfig,
   from: Date,
@@ -113,8 +135,10 @@ export function nextOccurrence(
   let next: Date;
 
   if (config.frequency === "daily") {
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-    next = cursor;
+    // Weekdays only. Weekly and bi-weekly already say which days they run on,
+    // and monthly lands on a date rather than a day, so this is the one
+    // frequency that had to be told.
+    next = nextBusinessDay(cursor);
   } else if (config.frequency === "monthly") {
     const day = config.dayOfMonth ?? Math.min(28, cursor.getUTCDate());
     next = new Date(
@@ -159,6 +183,19 @@ export function upcomingOccurrences(
   let cursor = toUtcDate(config.nextDueDate);
 
   if (config.endDate && config.nextDueDate > config.endDate) return dates;
+
+  /**
+   * A daily series set up on a Saturday starts on the Monday. Without this the
+   * first occurrence would land on a weekend that the rest of the schedule is
+   * careful to avoid.
+   */
+  if (config.frequency === "daily" && isWeekend(cursor)) {
+    while (isWeekend(cursor)) {
+      cursor = new Date(cursor.getTime() + 86_400_000);
+    }
+
+    if (config.endDate && toIsoDate(cursor) > config.endDate) return dates;
+  }
 
   dates.push(cursor);
 

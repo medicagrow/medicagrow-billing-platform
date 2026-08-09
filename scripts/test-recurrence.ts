@@ -12,6 +12,8 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { config } from "dotenv";
 import {
   describeRecurrence,
+  isWeekend,
+  nextBusinessDay,
   nextOccurrence,
   parseRecurringConfig,
   toIsoDate,
@@ -48,6 +50,44 @@ console.log("=== recurrence dates ===");
     toIsoDate(nextOccurrence(daily, thursday)!),
   );
 
+  /**
+   * "Daily" means every business day. A queue that fills up over a weekend
+   * nobody worked is two tasks that were never going to be done.
+   */
+  const friday = toUtcDate("2026-07-31");
+  const saturday = toUtcDate("2026-08-01");
+  const sunday = toUtcDate("2026-08-02");
+
+  check(
+    "daily jumps Friday to Monday",
+    toIsoDate(nextOccurrence(daily, friday)!) === "2026-08-03",
+    toIsoDate(nextOccurrence(daily, friday)!),
+  );
+  check(
+    "from a Saturday it still lands on Monday",
+    toIsoDate(nextOccurrence(daily, saturday)!) === "2026-08-03",
+    toIsoDate(nextOccurrence(daily, saturday)!),
+  );
+  check(
+    "and from a Sunday",
+    toIsoDate(nextOccurrence(daily, sunday)!) === "2026-08-03",
+    toIsoDate(nextOccurrence(daily, sunday)!),
+  );
+  check("Saturday is a weekend", isWeekend(saturday));
+  check("Sunday is a weekend", isWeekend(sunday));
+  check("Friday is not", !isWeekend(friday));
+
+  // A series set up over a weekend starts on the Monday rather than dropping
+  // its first occurrence onto a day nobody works.
+  const weekendStart = { frequency: "daily" as const, nextDueDate: "2026-08-01" };
+  const firstFew = upcomingOccurrences(weekendStart, 3).map(toIsoDate);
+  check(
+    "a daily series starting on a Saturday begins on Monday",
+    JSON.stringify(firstFew) ===
+      JSON.stringify(["2026-08-03", "2026-08-04", "2026-08-05"]),
+    firstFew.join(", "),
+  );
+
   const weekdays = {
     frequency: "weekly" as const,
     daysOfWeek: [1, 2, 3, 4, 5],
@@ -59,7 +99,6 @@ console.log("=== recurrence dates ===");
     toIsoDate(nextOccurrence(weekdays, thursday)!),
   );
 
-  const friday = toUtcDate("2026-07-31");
   check(
     "weekly Fri wraps to Mon",
     toIsoDate(nextOccurrence(weekdays, friday)!) === "2026-08-03",
@@ -134,6 +173,30 @@ async function main() {
 
   const today = toIsoDate(todayUtc);
 
+  /**
+   * Daily now means weekdays only, so these dates are derived rather than
+   * assumed — the suite has to pass whichever day of the week it runs on.
+   *
+   * The series is anchored on the last business day **on or before** today,
+   * not the next one: an occurrence has to be due for the sweep to create it,
+   * and on a Sunday the next business day is still in the future.
+   */
+  const previousBusinessDay = (from: Date): Date => {
+    const back = new Date(from.getTime());
+    do {
+      back.setUTCDate(back.getUTCDate() - 1);
+    } while (isWeekend(back));
+    return back;
+  };
+
+  const firstDueDate = isWeekend(todayUtc)
+    ? previousBusinessDay(todayUtc)
+    : todayUtc;
+
+  const firstDue = toIsoDate(firstDueDate);
+  const afterFirst = toIsoDate(nextBusinessDay(firstDueDate));
+  const beforeFirst = toIsoDate(previousBusinessDay(firstDueDate));
+
   const mark = async (id: string) =>
     parseRecurringConfig(
       (await prisma.task.findUnique({ where: { id } }))!.recurringConfig,
@@ -161,7 +224,7 @@ async function main() {
       createdById: owner.id,
       assignedToId: assignee.id,
       isRecurring: true,
-      recurringConfig: { frequency: "daily", nextDueDate: today },
+      recurringConfig: { frequency: "daily", nextDueDate: firstDue },
     },
   });
 
@@ -169,9 +232,9 @@ async function main() {
   check("creating a series makes one instance", first !== null);
   check("it is numbered 1", first?.instanceNumber === 1, String(first?.instanceNumber));
   check(
-    "it is dated the first occurrence",
+    "it is dated the first business day of the series",
     first?.dueDate !== null && first?.dueDate !== undefined &&
-      toIsoDate(first.dueDate) === today,
+      toIsoDate(first.dueDate) === firstDue,
     first?.dueDate ? toIsoDate(first.dueDate) : "none",
   );
   check("it inherits the assignee", first?.assignedToId === assignee.id);
@@ -181,18 +244,18 @@ async function main() {
   check("nothing else was generated up front", onlyOne === 1, String(onlyOne));
 
   check(
-    "the mark moved to tomorrow",
-    (await mark(parent.id)) === shift(1),
+    "the mark moved to the next business day",
+    (await mark(parent.id)) === afterFirst,
     await mark(parent.id),
   );
 
   console.log("\n=== an occurrence is not created before it is due ===");
 
   const early = await createNextInstance(await reload(parent.id));
-  check("closing today's does not create tomorrow's", early === null);
+  check("closing today's does not create the next one", early === null);
   check(
-    "and the mark stays on tomorrow",
-    (await mark(parent.id)) === shift(1),
+    "and the mark stays where it was",
+    (await mark(parent.id)) === afterFirst,
     await mark(parent.id),
   );
 
@@ -203,15 +266,15 @@ async function main() {
 
   const untouched = await generateDueInstances({ assignedToId: assignee.id });
   check(
-    "a series marked for tomorrow generates nothing",
+    "a series marked for the future generates nothing",
     untouched.created === 0,
     String(untouched.created),
   );
 
-  // Wind the mark back two days: yesterday and today are now both overdue.
+  // Wind the mark back one business day, so it and the first are both due.
   await prisma.task.update({
     where: { id: parent.id },
-    data: { recurringConfig: { frequency: "daily", nextDueDate: shift(-1) } },
+    data: { recurringConfig: { frequency: "daily", nextDueDate: beforeFirst } },
   });
 
   const swept = await generateDueInstances({ assignedToId: assignee.id });
@@ -223,8 +286,8 @@ async function main() {
     String(await prisma.task.count({ where: { parentTaskId: parent.id } })),
   );
   check(
-    "the mark ends up past today",
-    (await mark(parent.id)) === shift(1),
+    "the mark ends up past the first occurrence",
+    (await mark(parent.id)) === afterFirst,
     await mark(parent.id),
   );
 
@@ -251,16 +314,25 @@ async function main() {
   );
   check("the sweep reports what it wrote", caught.created === 7, String(caught.created));
   check(
-    "the newest catch-up instance is today's",
+    "the newest catch-up instance is the current one",
     (await prisma.task.findFirst({
       where: { parentTaskId: dormant.id },
       orderBy: { dueDate: "desc" },
       select: { dueDate: true },
-    }))!.dueDate!.toISOString().slice(0, 10) === today,
+    }))!.dueDate!.toISOString().slice(0, 10) === firstDue,
+  );
+  check(
+    "no catch-up instance landed on a weekend",
+    (
+      await prisma.task.findMany({
+        where: { parentTaskId: dormant.id },
+        select: { dueDate: true },
+      })
+    ).every((task) => task.dueDate !== null && !isWeekend(task.dueDate)),
   );
   check(
     "and the mark is back on schedule",
-    (await mark(dormant.id)) === shift(1),
+    (await mark(dormant.id)) === afterFirst,
     await mark(dormant.id),
   );
 
@@ -268,14 +340,14 @@ async function main() {
 
   await prisma.task.update({
     where: { id: parent.id },
-    data: { recurringConfig: { frequency: "daily", nextDueDate: today } },
+    data: { recurringConfig: { frequency: "daily", nextDueDate: firstDue } },
   });
 
   const duplicate = await createNextInstance(await reload(parent.id));
   check("a clashing date creates nothing", duplicate === null);
   check(
     "but the series still advances past it",
-    (await mark(parent.id)) === shift(1),
+    (await mark(parent.id)) === afterFirst,
     await mark(parent.id),
   );
 

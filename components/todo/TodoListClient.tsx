@@ -232,8 +232,13 @@ export function TodoListClient({
 
   // A bigger page can leave the cursor past the end of the list.
   useEffect(() => {
+    // Only once a response has landed. Before the first fetch `total` is 0,
+    // so pageCount is 1 — clamping then would throw away the page number the
+    // URL just restored, which is exactly what a back navigation depends on.
+    if (loading) return;
+
     if (page > pageCount) setFilters({ page: pageCount });
-  }, [page, pageCount, setFilters]);
+  }, [loading, page, pageCount, setFilters]);
   const allSelected =
     todos.length > 0 && todos.every((todo) => selected.has(todo.id));
 
