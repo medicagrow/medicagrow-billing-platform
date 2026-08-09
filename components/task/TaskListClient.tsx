@@ -1,6 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import { TaskEditPanel } from "@/components/task/TaskEditPanel";
 import {
@@ -17,13 +24,18 @@ import {
 } from "@/components/task/TaskFormFields";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-import { isPageSize, Pagination } from "@/components/ui/Pagination";
+import {
+  isPageSize,
+  Pagination,
+  PAGE_SIZE_OPTIONS,
+} from "@/components/ui/Pagination";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/format";
+import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { NumericInput } from "@/components/ui/inputs/NumericInput";
 import { formatMinutes } from "@/lib/task-timer-serialize";
@@ -64,6 +76,29 @@ function csvCell(value: string | number | null) {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+/** The first of the shared page sizes — 50 rows. */
+const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[0]!;
+
+/** What every filter reads as when nothing is chosen. */
+const FILTER_DEFAULTS = {
+  status: "",
+  priority: "",
+  practiceId: "",
+  assignedToId: "",
+  createdById: "",
+  taskTypeId: "",
+  tag: "",
+  search: "",
+  from: "",
+  to: "",
+  overdue: false,
+  recurring: false,
+  sort: "dueDate",
+  dir: "asc",
+  page: 1,
+  limit: DEFAULT_PAGE_SIZE,
+};
+
 export function TaskListClient({
   practices,
   assignableUsers,
@@ -95,10 +130,9 @@ export function TaskListClient({
 
   const [tasks, setTasks] = useState<TaskDto[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useLocalSetting(
+  const [storedPageSize, setStoredPageSize] = useLocalSetting(
     "tasks.list.pageSize",
-    50,
+    DEFAULT_PAGE_SIZE,
     isPageSize,
   );
   const [loading, setLoading] = useState(true);
@@ -112,21 +146,61 @@ export function TaskListClient({
   );
   const [estimateDraft, setEstimateDraft] = useState("");
 
-  const [status, setStatus] = useState(initial.status ?? "");
-  const [overdueOnly, setOverdueOnly] = useState(initial.overdue ?? false);
-  const [priority, setPriority] = useState("");
-  const [practiceId, setPracticeId] = useState(initial.practiceId ?? "");
-  const [assignedToId, setAssignedToId] = useState(initial.assignedToId ?? "");
-  const [createdById, setCreatedById] = useState("");
-  const [taskTypeId, setTaskTypeId] = useState("");
-  const [tag, setTag] = useState("");
-  const [recurringOnly, setRecurringOnly] = useState(false);
-  const [search, setSearch] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  /**
+   * Filters live in the URL, so opening a task and pressing back returns to
+   * the same list. `initial` seeds a link that arrives already filtered — a
+   * dashboard count, or the Team page — and the URL takes over from there.
+   */
+  const [filters, setFilters, clearFilters] = useFilterState(
+    {
+      ...FILTER_DEFAULTS,
+      status: initial.status ?? "",
+      practiceId: initial.practiceId ?? "",
+      assignedToId: initial.assignedToId ?? "",
+      overdue: initial.overdue ?? false,
+    },
+    { debounced: ["search", "tag"], pageKey: "page" },
+  );
 
-  const [sortKey, setSortKey] = useState<SortKey>("dueDate");
-  const [ascending, setAscending] = useState(true);
+  const {
+    status,
+    priority,
+    practiceId,
+    assignedToId,
+    createdById,
+    taskTypeId,
+    tag,
+    search,
+    from,
+    to,
+    page,
+  } = filters;
+
+  const overdueOnly = filters.overdue;
+  const recurringOnly = filters.recurring;
+  const pageSize = filters.limit;
+  const sortKey = filters.sort as SortKey;
+  const ascending = filters.dir === "asc";
+
+  const filtersActive = hasActiveFilters(filters, FILTER_DEFAULTS, [
+    "sort",
+    "dir",
+    "page",
+    "limit",
+  ]);
+
+  // Remembered per browser; a URL naming a size wins.
+  const appliedStoredSize = useRef(false);
+
+  useEffect(() => {
+    if (appliedStoredSize.current) return;
+    appliedStoredSize.current = true;
+
+    const named = new URLSearchParams(window.location.search).has("limit");
+    if (!named && storedPageSize !== DEFAULT_PAGE_SIZE) {
+      setFilters({ limit: storedPageSize });
+    }
+  }, [storedPageSize, setFilters]);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -196,10 +270,11 @@ export function TaskListClient({
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
-  // A bigger page can leave the cursor past the end of the list.
+  // A bigger page, or a filter that shortened the list, can leave the cursor
+  // past the end of it.
   useEffect(() => {
-    setPage((current) => Math.min(current, pageCount));
-  }, [pageCount]);
+    if (page > pageCount) setFilters({ page: pageCount });
+  }, [page, pageCount, setFilters]);
   const allSelected =
     tasks.length > 0 && tasks.every((task) => selected.has(task.id));
 
@@ -319,12 +394,11 @@ export function TaskListClient({
     <button
       type="button"
       onClick={() => {
-        if (sortKey === sortAs) setAscending((current) => !current);
-        else {
-          setSortKey(sortAs);
-          setAscending(true);
-        }
-        setPage(1);
+        setFilters(
+          sortKey === sortAs
+            ? { dir: ascending ? "desc" : "asc" }
+            : { sort: sortAs, dir: "asc" },
+        );
       }}
       className="inline-flex items-center gap-1 hover:text-slate-800"
     >
@@ -339,8 +413,7 @@ export function TaskListClient({
         <Input
           value={search}
           onChange={(event) => {
-            setSearch(event.target.value);
-            setPage(1);
+            setFilters({ search: event.target.value });
           }}
           placeholder="Search titles"
           className="w-auto min-w-[180px]"
@@ -350,8 +423,7 @@ export function TaskListClient({
         <Select
           value={status}
           onChange={(event) => {
-            setStatus(event.target.value);
-            setPage(1);
+            setFilters({ status: event.target.value });
           }}
           className="w-auto min-w-[140px]"
           aria-label="Status"
@@ -367,8 +439,7 @@ export function TaskListClient({
         <Select
           value={priority}
           onChange={(event) => {
-            setPriority(event.target.value);
-            setPage(1);
+            setFilters({ priority: event.target.value });
           }}
           className="w-auto min-w-[130px]"
           aria-label="Priority"
@@ -384,8 +455,7 @@ export function TaskListClient({
         <Select
           value={practiceId}
           onChange={(event) => {
-            setPracticeId(event.target.value);
-            setPage(1);
+            setFilters({ practiceId: event.target.value });
           }}
           className="w-auto min-w-[160px]"
           aria-label="Practice"
@@ -401,8 +471,7 @@ export function TaskListClient({
         <Select
           value={assignedToId}
           onChange={(event) => {
-            setAssignedToId(event.target.value);
-            setPage(1);
+            setFilters({ assignedToId: event.target.value });
           }}
           className="w-auto min-w-[160px]"
           aria-label="Assigned to"
@@ -418,8 +487,7 @@ export function TaskListClient({
         <Select
           value={createdById}
           onChange={(event) => {
-            setCreatedById(event.target.value);
-            setPage(1);
+            setFilters({ createdById: event.target.value });
           }}
           className="w-auto min-w-[160px]"
           aria-label="Created by"
@@ -435,8 +503,7 @@ export function TaskListClient({
         <Select
           value={taskTypeId}
           onChange={(event) => {
-            setTaskTypeId(event.target.value);
-            setPage(1);
+            setFilters({ taskTypeId: event.target.value });
           }}
           className="w-auto min-w-[160px]"
           aria-label="Task type"
@@ -452,8 +519,7 @@ export function TaskListClient({
         <Input
           value={tag}
           onChange={(event) => {
-            setTag(event.target.value);
-            setPage(1);
+            setFilters({ tag: event.target.value });
           }}
           placeholder="Tag"
           className="w-auto min-w-[120px]"
@@ -465,8 +531,7 @@ export function TaskListClient({
             type="date"
             value={from}
             onChange={(event) => {
-              setFrom(event.target.value);
-              setPage(1);
+              setFilters({ from: event.target.value });
             }}
             className="w-auto"
             aria-label="Due from"
@@ -476,8 +541,7 @@ export function TaskListClient({
             type="date"
             value={to}
             onChange={(event) => {
-              setTo(event.target.value);
-              setPage(1);
+              setFilters({ to: event.target.value });
             }}
             className="w-auto"
             aria-label="Due to"
@@ -489,8 +553,7 @@ export function TaskListClient({
             type="checkbox"
             checked={recurringOnly}
             onChange={(event) => {
-              setRecurringOnly(event.target.checked);
-              setPage(1);
+              setFilters({ recurring: event.target.checked });
             }}
             className="h-4 w-4 rounded border-slate-300"
           />
@@ -502,13 +565,22 @@ export function TaskListClient({
             type="checkbox"
             checked={overdueOnly}
             onChange={(event) => {
-              setOverdueOnly(event.target.checked);
-              setPage(1);
+              setFilters({ overdue: event.target.checked });
             }}
             className="h-4 w-4 rounded border-slate-300"
           />
           Overdue only
         </label>
+
+        {filtersActive ? (
+          <Button
+            variant="secondary"
+            className="px-3 py-2 text-xs"
+            onClick={clearFilters}
+          >
+            Clear all filters
+          </Button>
+        ) : null}
 
         <div className="ml-auto">
           <Button variant="secondary" onClick={exportCsv} disabled={loading}>
@@ -823,13 +895,13 @@ export function TaskListClient({
             totalPages={pageCount}
             totalItems={total}
             pageSize={pageSize}
-            onPageChange={setPage}
+            onPageChange={(next) => setFilters({ page: next })}
             onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPage(1);
+              setStoredPageSize(size);
+              setFilters({ limit: size, page: 1 });
             }}
             noun="tasks"
-            filtered={Boolean(status || priority || practiceId || assignedToId || createdById || taskTypeId || tag || search || from || to || recurringOnly || overdueOnly)}
+            filtered={filtersActive}
           />
         </div>
       )}

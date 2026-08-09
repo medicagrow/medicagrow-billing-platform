@@ -53,7 +53,16 @@ export function ProductivityFilterBar({
     // A new window or filter invalidates the current page of results.
     params.delete("page");
 
-    router.push(`${pathname}?${params.toString()}`);
+    /**
+     * `replace`, not `push`: narrowing a report is not a place you should
+     * have to press back through. Only arriving at the report is.
+     * `scroll: false` keeps the page still while a dropdown is used.
+     */
+    const query = params.toString();
+
+    router.replace(query === "" ? pathname : `${pathname}?${query}`, {
+      scroll: false,
+    });
   }
 
   function handlePreset(value: DateRangePreset) {

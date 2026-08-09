@@ -1,19 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AgingBadge } from "@/components/ar/AgingBadge";
 import { StatusBadge } from "@/components/ar/StatusBadge";
-import { isPageSize, Pagination } from "@/components/ui/Pagination";
+import {
+  isPageSize,
+  Pagination,
+  PAGE_SIZE_OPTIONS,
+} from "@/components/ui/Pagination";
+import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import type { ClaimDto } from "@/lib/ar-serialize";
+import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { RED_STATUSES } from "@/lib/ar-status";
 import { usePractice } from "@/lib/contexts/PracticeContext";
 import { formatDate, formatUSD } from "@/lib/format";
+
+/** The first of the shared page sizes — 50 rows. */
+const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[0]!;
 
 type QueueClaim = ClaimDto & {
   practiceId: string;
@@ -23,6 +32,19 @@ type QueueClaim = ClaimDto & {
 };
 
 type SortKey = "agingDays" | "balance" | "followUpDate" | "patientName";
+
+/** What every filter reads as when nothing is chosen. */
+const FILTER_DEFAULTS = {
+  practiceId: "",
+  insuranceName: "",
+  statusLabel: "",
+  followUpFrom: "",
+  followUpTo: "",
+  sort: "agingDays",
+  dir: "desc",
+  page: 1,
+  limit: DEFAULT_PAGE_SIZE,
+};
 
 export function MyQueueClient({
   practices,
@@ -40,22 +62,55 @@ export function MyQueueClient({
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [pageSize, setPageSize] = useLocalSetting(
+
+  // The queue is a working list, so its filters live in the URL — coming back
+  // from a claim should return to the same queue, not a reset one.
+  const [filters, setFilters, clearFilters] = useFilterState(FILTER_DEFAULTS, {
+    debounced: ["insuranceName"],
+    pageKey: "page",
+  });
+
+  const {
+    practiceId,
+    insuranceName,
+    statusLabel,
+    followUpFrom,
+    followUpTo,
+    page,
+  } = filters;
+
+  const pageSize = filters.limit;
+
+  const filtersActive = hasActiveFilters(filters, FILTER_DEFAULTS, [
+    "sort",
+    "dir",
+    "page",
+    "limit",
+  ]);
+
+  const sortKey = filters.sort as SortKey;
+  const sortAsc = filters.dir === "asc";
+
+  const [storedPageSize, setStoredPageSize] = useLocalSetting(
     "ar.myQueue.pageSize",
-    50,
+    DEFAULT_PAGE_SIZE,
     isPageSize,
   );
 
-  const [practiceId, setPracticeId] = useState("");
-  const [insuranceName, setInsuranceName] = useState("");
-  const [statusLabel, setStatusLabel] = useState("");
-  const [followUpFrom, setFollowUpFrom] = useState("");
-  const [followUpTo, setFollowUpTo] = useState("");
+  // Remembered per browser, but a URL naming a size wins so a shared link
+  // opens the view the sender saw.
+  const appliedStoredSize = useRef(false);
 
-  const [sortKey, setSortKey] = useState<SortKey>("agingDays");
-  const [sortAsc, setSortAsc] = useState(false);
+  useEffect(() => {
+    if (appliedStoredSize.current) return;
+    appliedStoredSize.current = true;
+
+    const named = new URLSearchParams(window.location.search).has("limit");
+    if (!named && storedPageSize !== DEFAULT_PAGE_SIZE) {
+      setFilters({ limit: storedPageSize });
+    }
+  }, [storedPageSize, setFilters]);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -132,10 +187,12 @@ export function MyQueueClient({
   }, [claims, sortKey, sortAsc]);
 
   function toggleSort(key: SortKey) {
-    if (key === sortKey) setSortAsc((current) => !current);
+    if (key === sortKey) setFilters({ dir: sortAsc ? "desc" : "asc" });
     else {
-      setSortKey(key);
-      setSortAsc(key === "followUpDate" || key === "patientName");
+      setFilters({
+        sort: key,
+        dir: key === "followUpDate" || key === "patientName" ? "asc" : "desc",
+      });
     }
   }
 
@@ -195,8 +252,7 @@ export function MyQueueClient({
         <Select
           value={practiceId}
           onChange={(event) => {
-            setPracticeId(event.target.value);
-            setPage(1);
+            setFilters({ practiceId: event.target.value });
           }}
           className="w-auto min-w-[170px]"
         >
@@ -211,8 +267,7 @@ export function MyQueueClient({
         <Input
           value={insuranceName}
           onChange={(event) => {
-            setInsuranceName(event.target.value);
-            setPage(1);
+            setFilters({ insuranceName: event.target.value });
           }}
           placeholder="Filter by insurance"
           className="w-auto min-w-[170px]"
@@ -221,8 +276,7 @@ export function MyQueueClient({
         <Select
           value={statusLabel}
           onChange={(event) => {
-            setStatusLabel(event.target.value);
-            setPage(1);
+            setFilters({ statusLabel: event.target.value });
           }}
           className="w-auto min-w-[160px]"
         >
@@ -239,8 +293,7 @@ export function MyQueueClient({
             type="date"
             value={followUpFrom}
             onChange={(event) => {
-              setFollowUpFrom(event.target.value);
-              setPage(1);
+              setFilters({ followUpFrom: event.target.value });
             }}
             className="w-auto"
             aria-label="Follow-up from"
@@ -250,13 +303,22 @@ export function MyQueueClient({
             type="date"
             value={followUpTo}
             onChange={(event) => {
-              setFollowUpTo(event.target.value);
-              setPage(1);
+              setFilters({ followUpTo: event.target.value });
             }}
             className="w-auto"
             aria-label="Follow-up to"
           />
         </div>
+
+        {filtersActive ? (
+          <Button
+            variant="secondary"
+            className="px-3 py-2 text-xs"
+            onClick={clearFilters}
+          >
+            Clear all filters
+          </Button>
+        ) : null}
       </div>
 
       {loading ? (
@@ -361,10 +423,10 @@ export function MyQueueClient({
             totalPages={totalPages}
             totalItems={summary.totalClaims}
             pageSize={pageSize}
-            onPageChange={setPage}
+            onPageChange={(next) => setFilters({ page: next })}
             onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPage(1);
+              setStoredPageSize(size);
+              setFilters({ limit: size, page: 1 });
             }}
             noun="claims"
             filtered={Boolean(

@@ -1,12 +1,23 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import { AddTodoModal } from "@/components/todo/AddTodoModal";
 import { TodoEditPanel } from "@/components/todo/TodoEditPanel";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
-import { isPageSize, Pagination } from "@/components/ui/Pagination";
+import {
+  isPageSize,
+  Pagination,
+  PAGE_SIZE_OPTIONS,
+} from "@/components/ui/Pagination";
 import {
   DueDateFilters,
   dueDateParams,
@@ -18,6 +29,7 @@ import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { formatDate } from "@/lib/format";
+import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { TodoPriority, TodoStatus } from "@/lib/generated/prisma/enums";
 import { TODO_STATUS_LABELS, type TodoDto } from "@/lib/todo-serialize";
@@ -45,6 +57,27 @@ const STATUS_VARIANT: Record<
   CLOSED: "neutral",
 };
 
+/** The first of the shared page sizes — 50 rows. */
+const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[0]!;
+
+/** What every filter reads as when nothing is chosen. */
+const FILTER_DEFAULTS = {
+  status: "",
+  priority: "",
+  practiceId: "",
+  assignedToId: "",
+  search: "",
+  from: "",
+  to: "",
+  due: "none",
+  recurring: false,
+  shared: false,
+  sort: "dueDate",
+  dir: "asc",
+  page: 1,
+  limit: DEFAULT_PAGE_SIZE,
+};
+
 export function TodoListClient({
   practices,
   assignableUsers,
@@ -66,10 +99,9 @@ export function TodoListClient({
 
   const [todos, setTodos] = useState<TodoDto[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useLocalSetting(
+  const [storedPageSize, setStoredPageSize] = useLocalSetting(
     "todos.list.pageSize",
-    50,
+    DEFAULT_PAGE_SIZE,
     isPageSize,
   );
   const [loading, setLoading] = useState(true);
@@ -79,19 +111,57 @@ export function TodoListClient({
   const [bulkAction, setBulkAction] = useState("");
   const [applying, setApplying] = useState(false);
 
-  const [status, setStatus] = useState("");
-  const [priority, setPriority] = useState("");
-  const [practiceId, setPracticeId] = useState("");
-  const [assignedToId, setAssignedToId] = useState(initialAssignedToId ?? "");
-  const [search, setSearch] = useState("");
-  const [isRecurring, setIsRecurring] = useState(false);
-  const [isShared, setIsShared] = useState(false);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [dueQuick, setDueQuick] = useState<DueQuickFilter>(initialDueQuick);
+  /**
+   * Filters live in the URL, so opening a to do and pressing back returns to
+   * the same list. The `initial*` props seed a link that arrives already
+   * filtered, and the URL takes over from there.
+   */
+  const [filters, setFilters, clearFilters] = useFilterState(
+    {
+      ...FILTER_DEFAULTS,
+      assignedToId: initialAssignedToId ?? "",
+      due: initialDueQuick as string,
+    },
+    { debounced: ["search"], pageKey: "page" },
+  );
 
-  const [sortKey, setSortKey] = useState<SortKey>("dueDate");
-  const [ascending, setAscending] = useState(true);
+  const {
+    status,
+    priority,
+    practiceId,
+    assignedToId,
+    search,
+    from,
+    to,
+    page,
+  } = filters;
+
+  const isRecurring = filters.recurring;
+  const isShared = filters.shared;
+  const dueQuick = filters.due as DueQuickFilter;
+  const pageSize = filters.limit;
+  const sortKey = filters.sort as SortKey;
+  const ascending = filters.dir === "asc";
+
+  const filtersActive = hasActiveFilters(filters, FILTER_DEFAULTS, [
+    "sort",
+    "dir",
+    "page",
+    "limit",
+  ]);
+
+  // Remembered per browser; a URL naming a size wins.
+  const appliedStoredSize = useRef(false);
+
+  useEffect(() => {
+    if (appliedStoredSize.current) return;
+    appliedStoredSize.current = true;
+
+    const named = new URLSearchParams(window.location.search).has("limit");
+    if (!named && storedPageSize !== DEFAULT_PAGE_SIZE) {
+      setFilters({ limit: storedPageSize });
+    }
+  }, [storedPageSize, setFilters]);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -162,8 +232,8 @@ export function TodoListClient({
 
   // A bigger page can leave the cursor past the end of the list.
   useEffect(() => {
-    setPage((current) => Math.min(current, pageCount));
-  }, [pageCount]);
+    if (page > pageCount) setFilters({ page: pageCount });
+  }, [page, pageCount, setFilters]);
   const allSelected =
     todos.length > 0 && todos.every((todo) => selected.has(todo.id));
 
@@ -216,12 +286,11 @@ export function TodoListClient({
     <button
       type="button"
       onClick={() => {
-        if (sortKey === sortAs) setAscending((current) => !current);
-        else {
-          setSortKey(sortAs);
-          setAscending(true);
-        }
-        setPage(1);
+        setFilters(
+          sortKey === sortAs
+            ? { dir: ascending ? "desc" : "asc" }
+            : { sort: sortAs, dir: "asc" },
+        );
       }}
       className="inline-flex items-center gap-1 hover:text-slate-800"
     >
@@ -236,8 +305,7 @@ export function TodoListClient({
         <Input
           value={search}
           onChange={(event) => {
-            setSearch(event.target.value);
-            setPage(1);
+            setFilters({ search: event.target.value });
           }}
           placeholder="Search titles"
           className="w-auto min-w-[170px]"
@@ -247,8 +315,7 @@ export function TodoListClient({
         <Select
           value={status}
           onChange={(event) => {
-            setStatus(event.target.value);
-            setPage(1);
+            setFilters({ status: event.target.value });
           }}
           className="w-auto min-w-[140px]"
           aria-label="Status"
@@ -264,8 +331,7 @@ export function TodoListClient({
         <Select
           value={priority}
           onChange={(event) => {
-            setPriority(event.target.value);
-            setPage(1);
+            setFilters({ priority: event.target.value });
           }}
           className="w-auto min-w-[130px]"
           aria-label="Priority"
@@ -281,8 +347,7 @@ export function TodoListClient({
         <Select
           value={practiceId}
           onChange={(event) => {
-            setPracticeId(event.target.value);
-            setPage(1);
+            setFilters({ practiceId: event.target.value });
           }}
           className="w-auto min-w-[160px]"
           aria-label="Practice"
@@ -299,8 +364,7 @@ export function TodoListClient({
           <Select
             value={assignedToId}
             onChange={(event) => {
-              setAssignedToId(event.target.value);
-              setPage(1);
+              setFilters({ assignedToId: event.target.value });
             }}
             className="w-auto min-w-[160px]"
             aria-label="Assigned to"
@@ -317,18 +381,15 @@ export function TodoListClient({
         <DueDateFilters
           quick={dueQuick}
           onQuickChange={(next) => {
-            setDueQuick(next);
-            setPage(1);
+            setFilters({ due: next });
           }}
           from={from}
           to={to}
           onFromChange={(value) => {
-            setFrom(value);
-            setPage(1);
+            setFilters({ from: value });
           }}
           onToChange={(value) => {
-            setTo(value);
-            setPage(1);
+            setFilters({ to: value });
           }}
         />
 
@@ -337,8 +398,7 @@ export function TodoListClient({
             type="checkbox"
             checked={isRecurring}
             onChange={(event) => {
-              setIsRecurring(event.target.checked);
-              setPage(1);
+              setFilters({ recurring: event.target.checked });
             }}
             className="h-4 w-4 rounded border-slate-300"
           />
@@ -350,13 +410,22 @@ export function TodoListClient({
             type="checkbox"
             checked={isShared}
             onChange={(event) => {
-              setIsShared(event.target.checked);
-              setPage(1);
+              setFilters({ shared: event.target.checked });
             }}
             className="h-4 w-4 rounded border-slate-300"
           />
           Shared
         </label>
+
+        {filtersActive ? (
+          <Button
+            variant="secondary"
+            className="px-3 py-2 text-xs"
+            onClick={clearFilters}
+          >
+            Clear all filters
+          </Button>
+        ) : null}
 
         <div className="ml-auto">
           <Button onClick={() => setAddOpen(true)}>Add to do</Button>
@@ -561,21 +630,13 @@ export function TodoListClient({
             totalPages={pageCount}
             totalItems={total}
             pageSize={pageSize}
-            onPageChange={setPage}
+            onPageChange={(next) => setFilters({ page: next })}
             onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPage(1);
+              setStoredPageSize(size);
+              setFilters({ limit: size, page: 1 });
             }}
             noun="to dos"
-            filtered={Boolean(
-              status ||
-                practiceId ||
-                assignedToId ||
-                search ||
-                from ||
-                to ||
-                dueQuick !== "none",
-            )}
+            filtered={filtersActive}
           />
         </div>
       )}

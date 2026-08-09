@@ -7,6 +7,7 @@ import { Select } from "@/components/ui/Select";
 import { MultiSelectDropdown } from "@/components/ui/MultiSelectDropdown";
 import { isPageSize, Pagination } from "@/components/ui/Pagination";
 import { downloadCsv } from "@/lib/csv-export";
+import { useFilterState } from "@/lib/hooks/useFilterState";
 import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { usePractice } from "@/lib/contexts/PracticeContext";
 import { formatDateIST, formatTimeIST } from "@/lib/timezone";
@@ -155,15 +156,36 @@ export function TimeLogsClient({
   const startFrom = initialFrom ?? toDateParam(fallback.from);
   const startTo = initialTo ?? toDateParam(fallback.to);
 
-  const [preset, setPreset] = useState<Preset>(linked ? "custom" : "this_week");
+  /**
+   * The whole filter set lives in the URL: this report is something people
+   * send each other, and a link that opens on somebody else's screen showing
+   * a different fortnight is worse than no link.
+   */
+  const [filters, setFilters, clearFilters] = useFilterState(
+    {
+      preset: (linked ? "custom" : "this_week") as string,
+      from: startFrom,
+      to: startTo,
+      userIds: initialUserIds,
+      practiceIds: initialPracticeIds,
+      taskTypeIds: initialTaskTypeIds,
+      page: 1,
+    },
+    { pageKey: "page" },
+  );
+
+  const preset = filters.preset as Preset;
+  const appliedFrom = filters.from;
+  const appliedTo = filters.to;
+  const userIds = filters.userIds;
+  const practiceIds = filters.practiceIds;
+  const taskTypeIds = filters.taskTypeIds;
+  const page = filters.page;
+
+  // What the custom date boxes show while they are being edited — only
+  // "Apply" moves the range the report is actually built from.
   const [customFrom, setCustomFrom] = useState(startFrom);
   const [customTo, setCustomTo] = useState(startTo);
-  const [appliedFrom, setAppliedFrom] = useState(startFrom);
-  const [appliedTo, setAppliedTo] = useState(startTo);
-
-  const [userIds, setUserIds] = useState<string[]>(initialUserIds);
-  const [practiceIds, setPracticeIds] = useState<string[]>(initialPracticeIds);
-  const [taskTypeIds, setTaskTypeIds] = useState<string[]>(initialTaskTypeIds);
 
   const [tab, setTab] = useState<Tab>("biller");
   const [expandedBillers, setExpandedBillers] = useState<string[]>([]);
@@ -175,7 +197,6 @@ export function TimeLogsClient({
 
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [pageSize, setPageSize] = useLocalSetting(
     "timeLogs.sessions.pageSize",
@@ -185,18 +206,20 @@ export function TimeLogsClient({
   const [totalSessions, setTotalSessions] = useState(0);
 
   function applyPreset(next: Preset) {
-    setPreset(next);
-    setPage(1);
-
     if (next === "custom") {
-      setAppliedFrom(customFrom);
-      setAppliedTo(customTo);
+      setFilters({ preset: next, from: customFrom, to: customTo });
       return;
     }
 
+    // A named period resolves to real dates, so the URL carries the window
+    // rather than a word whose meaning moves with the calendar.
     const range = resolvePreset(next);
-    setAppliedFrom(toDateParam(range.from));
-    setAppliedTo(toDateParam(range.to));
+
+    setFilters({
+      preset: next,
+      from: toDateParam(range.from),
+      to: toDateParam(range.to),
+    });
   }
 
   /**
@@ -280,23 +303,11 @@ export function TimeLogsClient({
     loadSessions();
   }, [loadSessions]);
 
-  // A change of filters invalidates whatever page of sessions was showing.
-  useEffect(() => {
-    setPage(1);
-  }, [userIds, effectivePracticeIds, taskTypeIds, appliedFrom, appliedTo]);
-
   const filtersActive =
     userIds.length > 0 ||
     practiceIds.length > 0 ||
     taskTypeIds.length > 0 ||
     preset !== "this_week";
-
-  function clearFilters() {
-    setUserIds([]);
-    setPracticeIds([]);
-    setTaskTypeIds([]);
-    applyPreset("this_week");
-  }
 
   const overrunTasks = useMemo(
     () =>
@@ -406,10 +417,9 @@ export function TimeLogsClient({
               variant="secondary"
               className="px-3 py-2 text-xs"
               disabled={!customFrom || !customTo || customFrom > customTo}
-              onClick={() => {
-                setAppliedFrom(customFrom);
-                setAppliedTo(customTo);
-              }}
+              onClick={() =>
+                setFilters({ from: customFrom, to: customTo })
+              }
             >
               Apply
             </Button>
@@ -430,7 +440,7 @@ export function TimeLogsClient({
               label: biller.name,
             }))}
             selected={userIds}
-            onChange={setUserIds}
+            onChange={(next) => setFilters({ userIds: next })}
             placeholder="All Billers"
             allLabel="All Billers"
             noun="billers"
@@ -448,7 +458,7 @@ export function TimeLogsClient({
               label: practice.name,
             }))}
             selected={practiceIds}
-            onChange={setPracticeIds}
+            onChange={(next) => setFilters({ practiceIds: next })}
             placeholder="All Practices"
             allLabel="All Practices"
             noun="practices"
@@ -466,7 +476,7 @@ export function TimeLogsClient({
               label: type.name,
             }))}
             selected={taskTypeIds}
-            onChange={setTaskTypeIds}
+            onChange={(next) => setFilters({ taskTypeIds: next })}
             placeholder="All Task Types"
             allLabel="All Task Types"
             noun="types"
@@ -623,7 +633,7 @@ export function TimeLogsClient({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  setUserIds([biller.userId]);
+                                  setFilters({ userIds: [biller.userId] });
                                   setTab("overrun");
                                 }}
                                 className="font-medium text-amber-600 underline-offset-2 hover:underline"
@@ -962,10 +972,10 @@ export function TimeLogsClient({
               totalPages={totalPages}
               totalItems={totalSessions}
               pageSize={pageSize}
-              onPageChange={setPage}
+              onPageChange={(next) => setFilters({ page: next })}
               onPageSizeChange={(size) => {
                 setPageSize(size);
-                setPage(1);
+                setFilters({ page: 1 });
               }}
               noun="sessions"
               filtered={filtersActive}

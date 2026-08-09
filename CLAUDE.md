@@ -68,6 +68,22 @@ other medical billing companies.
   a JavaScript pass over the same rows.
 - **Vercel runs in `bom1`**, beside the Supabase project in `ap-south-1`.
   Set in [vercel.json](vercel.json); if the database moves, move it too.
+- **List filters live in the URL**, through `useFilterState()` in
+  [lib/hooks/useFilterState.ts](lib/hooks/useFilterState.ts). React state does
+  not survive a navigation, so filters held there were lost the moment somebody
+  opened a row and pressed back. Three rules the hook keeps: **`replace`, not
+  `push`** — a keystroke must not become a history entry; **local state
+  renders and the URL follows** — deriving the inputs from `useSearchParams()`
+  would make typing wait out the debounce; and **only declared keys are
+  touched**, so the top bar's `practiceId` survives. Each list declares its
+  defaults once as `FILTER_DEFAULTS`; the hook infers each value's shape from
+  its default, omits anything still at its default, and resets `page` when any
+  other filter moves. The encoding is in
+  [lib/filter-params.ts](lib/filter-params.ts), free of React so it can be
+  tested and read by server components.
+  - Page size is the exception that is **both**: the URL wins when it names
+    one, so a shared link opens the view the sender saw, and `useLocalSetting`
+    still remembers the choice for the next visit.
 - **Paginated lists share one component.**
   [components/ui/Pagination.tsx](components/ui/Pagination.tsx) renders the page
   numbers (first two, last two, current ± 1, "…" between — and a gap of exactly
@@ -367,6 +383,10 @@ npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
   whichever the claim has.
 - The search box debounces 300 ms — a request per keystroke lets a slow early
   response land after a fast later one.
+- The claim list's free-text box spans **three** fields — patient name, CPT
+  and visit id — since a practice on the phone may quote any of them. The
+  visit-status filter is only rendered when the batch actually carries visit
+  statuses; an empty dropdown promises data that is not there.
 - `visitId` and `visitStatus` are optional reference fields some EHRs export.
   Auto-detected by the standard parser, **hidden by default** in the claim
   table, and toggled per browser from the Columns menu. `visit_status` is
@@ -430,6 +450,7 @@ built to take more modules without touching the routes or pages.
 npx tsx scripts/test-notes.ts      # generated note text, retired outcomes
 npx tsx scripts/test-aging-rollups.ts  # SQL roll-ups match a JS pass
 npx tsx scripts/test-lazy-schedule.ts  # sweep rate limit, per scope
+npx tsx scripts/test-filter-params.ts  # URL filter round trip, foreign params
 npx tsx scripts/test-my-queue.ts   # queue scoping (needs the dev server)
 npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
 ```

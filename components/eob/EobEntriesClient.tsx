@@ -1,16 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { StatusBadge } from "@/components/ar/StatusBadge";
 import { Badge } from "@/components/ui/Badge";
-import { isPageSize, Pagination } from "@/components/ui/Pagination";
+import {
+  isPageSize,
+  Pagination,
+  PAGE_SIZE_OPTIONS,
+} from "@/components/ui/Pagination";
+import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import type { EobEntryDto } from "@/lib/eob-serialize";
+import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { formatDate, formatUSD } from "@/lib/format";
 import { EobEntryType, StatusCategory } from "@/lib/generated/prisma/enums";
@@ -35,6 +41,24 @@ const CATEGORY_LABELS: Record<StatusCategory, string> = {
   GREEN: "Resolved",
 };
 
+/** The first of the shared page sizes — 50 rows. */
+const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[0]!;
+
+/** What every filter reads as when nothing is chosen. */
+const FILTER_DEFAULTS = {
+  entryType: "",
+  statusCategory: "",
+  practiceId: "",
+  payerName: "",
+  assignedToId: "",
+  from: "",
+  to: "",
+  sort: "batchDate",
+  dir: "desc",
+  page: 1,
+  limit: DEFAULT_PAGE_SIZE,
+};
+
 export function EobEntriesClient({
   practices,
   assignableUsers,
@@ -55,24 +79,61 @@ export function EobEntriesClient({
 
   const [entries, setEntries] = useState<EobEntryDto[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useLocalSetting(
+  const [storedPageSize, setStoredPageSize] = useLocalSetting(
     "eob.entries.pageSize",
     50,
     isPageSize,
   );
   const [loading, setLoading] = useState(true);
 
-  const [entryType, setEntryType] = useState(initialEntryType);
-  const [statusCategory, setStatusCategory] = useState(initialStatusCategory);
-  const [practiceId, setPracticeId] = useState("");
-  const [payerName, setPayerName] = useState("");
-  const [assignedToId, setAssignedToId] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  /**
+   * Filters live in the URL so opening an entry and pressing back returns to
+   * the same list. `initial*` still seeds a link that arrives with a filter
+   * already chosen — a dashboard card — and the URL takes over from there.
+   */
+  const [filters, setFilters, clearFilters] = useFilterState(
+    {
+      ...FILTER_DEFAULTS,
+      entryType: initialEntryType,
+      statusCategory: initialStatusCategory,
+    },
+    { debounced: ["payerName"], pageKey: "page" },
+  );
 
-  const [sortKey, setSortKey] = useState<SortKey>("batchDate");
-  const [ascending, setAscending] = useState(false);
+  const {
+    entryType,
+    statusCategory,
+    practiceId,
+    payerName,
+    assignedToId,
+    from,
+    to,
+    page,
+  } = filters;
+
+  const pageSize = filters.limit;
+  const sortKey = filters.sort as SortKey;
+  const ascending = filters.dir === "asc";
+
+  const filtersActive = hasActiveFilters(filters, FILTER_DEFAULTS, [
+    "sort",
+    "dir",
+    "page",
+    "limit",
+  ]);
+
+  // Remembered per browser; a URL naming a size wins.
+  const appliedStoredSize = useRef(false);
+
+  useEffect(() => {
+    if (appliedStoredSize.current) return;
+    appliedStoredSize.current = true;
+
+    const named = new URLSearchParams(window.location.search).has("limit");
+    if (!named && storedPageSize !== DEFAULT_PAGE_SIZE) {
+      setFilters({ limit: storedPageSize });
+    }
+  }, [storedPageSize, setFilters]);
 
   const effectivePracticeId = contextPracticeId ?? practiceId;
 
@@ -126,25 +187,13 @@ export function EobEntriesClient({
     load();
   }, [load]);
 
-  // Changing a filter invalidates the current page number.
-  useEffect(() => {
-    setPage(1);
-  }, [
-    entryType,
-    statusCategory,
-    effectivePracticeId,
-    payerName,
-    assignedToId,
-    from,
-    to,
-  ]);
-
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
 
-  // A bigger page can leave the cursor past the end of the list.
+  // A bigger page, or a filter that shortened the list, can leave the cursor
+  // past the end of it.
   useEffect(() => {
-    setPage((current) => Math.min(current, pageCount));
-  }, [pageCount]);
+    if (page > pageCount) setFilters({ page: pageCount });
+  }, [page, pageCount, setFilters]);
 
   const SortHeader = ({
     label,
@@ -157,15 +206,14 @@ export function EobEntriesClient({
   }) => (
     <button
       type="button"
-      onClick={() => {
-        if (sortKey === sortAs) setAscending((current) => !current);
-        else {
-          setSortKey(sortAs);
-          // Dates read newest-first; names and amounts read ascending.
-          setAscending(sortAs !== "batchDate");
-        }
-        setPage(1);
-      }}
+      onClick={() =>
+        setFilters(
+          sortKey === sortAs
+            ? { dir: ascending ? "desc" : "asc" }
+            : // Dates read newest-first; names and amounts read ascending.
+              { sort: sortAs, dir: sortAs === "batchDate" ? "desc" : "asc" },
+        )
+      }
       className={`inline-flex items-center gap-1 hover:text-slate-800 ${
         align === "right" ? "justify-end" : ""
       }`}
@@ -180,7 +228,7 @@ export function EobEntriesClient({
       <div className="mb-3 flex flex-wrap items-end gap-2">
         <Select
           value={entryType}
-          onChange={(event) => setEntryType(event.target.value)}
+          onChange={(event) => setFilters({ entryType: event.target.value })}
           className="w-auto min-w-[130px]"
           aria-label="Type"
         >
@@ -191,7 +239,7 @@ export function EobEntriesClient({
 
         <Select
           value={statusCategory}
-          onChange={(event) => setStatusCategory(event.target.value)}
+          onChange={(event) => setFilters({ statusCategory: event.target.value })}
           className="w-auto min-w-[150px]"
           aria-label="Status"
         >
@@ -206,7 +254,7 @@ export function EobEntriesClient({
         {isLocked ? null : (
           <Select
             value={practiceId}
-            onChange={(event) => setPracticeId(event.target.value)}
+            onChange={(event) => setFilters({ practiceId: event.target.value })}
             className="w-auto min-w-[160px]"
             aria-label="Practice"
           >
@@ -221,7 +269,7 @@ export function EobEntriesClient({
 
         <Input
           value={payerName}
-          onChange={(event) => setPayerName(event.target.value)}
+          onChange={(event) => setFilters({ payerName: event.target.value })}
           placeholder="Search payer"
           className="w-auto min-w-[160px]"
           aria-label="Payer name"
@@ -229,7 +277,7 @@ export function EobEntriesClient({
 
         <Select
           value={assignedToId}
-          onChange={(event) => setAssignedToId(event.target.value)}
+          onChange={(event) => setFilters({ assignedToId: event.target.value })}
           className="w-auto min-w-[160px]"
           aria-label="Assigned to"
         >
@@ -245,7 +293,7 @@ export function EobEntriesClient({
           <Input
             type="date"
             value={from}
-            onChange={(event) => setFrom(event.target.value)}
+            onChange={(event) => setFilters({ from: event.target.value })}
             className="w-auto"
             aria-label="Received from"
           />
@@ -253,11 +301,21 @@ export function EobEntriesClient({
           <Input
             type="date"
             value={to}
-            onChange={(event) => setTo(event.target.value)}
+            onChange={(event) => setFilters({ to: event.target.value })}
             className="w-auto"
             aria-label="Received to"
           />
         </div>
+
+        {filtersActive ? (
+          <Button
+            variant="secondary"
+            className="px-3 py-2 text-xs"
+            onClick={clearFilters}
+          >
+            Clear all filters
+          </Button>
+        ) : null}
       </div>
 
       {loading ? (
@@ -388,13 +446,13 @@ export function EobEntriesClient({
             totalPages={pageCount}
             totalItems={total}
             pageSize={pageSize}
-            onPageChange={setPage}
+            onPageChange={(next) => setFilters({ page: next })}
             onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPage(1);
+              setStoredPageSize(size);
+              setFilters({ limit: size, page: 1 });
             }}
             noun="entries"
-            filtered={Boolean(entryType || statusCategory || payerName || assignedToId || from || to)}
+            filtered={filtersActive}
           />
         </div>
       )}
