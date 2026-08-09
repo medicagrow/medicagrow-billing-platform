@@ -99,7 +99,8 @@ export default async function BatchDetailPage({
   const closed = batch.status === BatchStatus.CLOSED;
 
   // Only people who can actually open this batch are offered as assignees.
-  const [assignees, insurances, providerRows] = await Promise.all([
+  const [assignees, insurances, providerRows, visitStatuses] =
+    await Promise.all([
     isManager ? practiceAssignees(batch.practiceId) : Promise.resolve([]),
     prisma.arClaim.findMany({
       where: { batchId: batch.id },
@@ -113,10 +114,25 @@ export default async function BatchDetailPage({
      * has, so the filter has to offer both, merged.
      */
     prisma.arClaim.findMany({
-      where: { batchId: batch.id },
-      select: { renderingProvider: true, providerName: true },
-    }),
-  ]);
+        where: { batchId: batch.id },
+        select: { renderingProvider: true, providerName: true },
+      }),
+      /**
+       * Visit status is an optional export field. Most batches have none, and
+       * the filter is only rendered when this comes back with something —
+       * offering an empty dropdown suggests data that is not there.
+       */
+      prisma.arClaim.findMany({
+        where: { batchId: batch.id, visitStatus: { not: null } },
+        distinct: ["visitStatus"],
+        select: { visitStatus: true },
+        orderBy: { visitStatus: "asc" },
+      }),
+    ]);
+
+  const visitStatusOptions = visitStatuses
+    .map((row) => row.visitStatus?.trim())
+    .filter((status): status is string => Boolean(status));
 
   const providerOptions = Array.from(
     new Set(
@@ -220,6 +236,7 @@ export default async function BatchDetailPage({
         assignees={assignees}
         insuranceOptions={insurances.map((row) => row.insuranceName)}
         providerOptions={providerOptions}
+        visitStatusOptions={visitStatusOptions}
         initialTab={initialTab}
       />
     </div>

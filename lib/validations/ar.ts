@@ -100,7 +100,13 @@ export const listClaimsQuerySchema = z.object({
   /** Date-of-service range, inclusive at both ends. */
   dosFrom: dateStringSchema.optional(),
   dosTo: dateStringSchema.optional(),
-  /** Free text over patient name and CPT code. */
+  /**
+   * Exact match on the optional visit status. Single-select: the values are a
+   * small fixed set per EHR, so picking two of them is not a question anyone
+   * asks.
+   */
+  visitStatus: z.string().trim().max(80).optional(),
+  /** Free text over patient name, CPT code and visit id. */
   search: z.string().trim().max(100).optional(),
   overdue: z.enum(["true", "false"]).optional(),
   sort: z

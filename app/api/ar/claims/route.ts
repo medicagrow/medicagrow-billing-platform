@@ -63,6 +63,7 @@ export async function GET(request: NextRequest) {
     providerNames: searchParams.get("providerNames") ?? undefined,
     dosFrom: searchParams.get("dosFrom") ?? undefined,
     dosTo: searchParams.get("dosTo") ?? undefined,
+    visitStatus: searchParams.get("visitStatus") ?? undefined,
     search: searchParams.get("search") ?? undefined,
     sort: searchParams.get("sort") ?? undefined,
     direction: searchParams.get("direction") ?? undefined,
@@ -126,12 +127,17 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // Free text spans the patient and the CPT — one box, two places to look.
+  /**
+   * Free text spans the patient, the CPT and the visit id — one box, three
+   * places to look. The visit id is how some practices refer to an encounter
+   * on the phone, so it belongs in the same box rather than a field of its own.
+   */
   if (filters.search) {
     anyOf.push({
       OR: [
         { patientName: { contains: filters.search, mode: "insensitive" } },
         { cptCode: { contains: filters.search, mode: "insensitive" } },
+        { visitId: { contains: filters.search, mode: "insensitive" } },
       ],
     });
   }
@@ -161,6 +167,7 @@ export async function GET(request: NextRequest) {
       ? { statusCategory: filters.statusCategory }
       : {}),
     ...(filters.statusLabel ? { statusLabel: filters.statusLabel } : {}),
+    ...(filters.visitStatus ? { visitStatus: filters.visitStatus } : {}),
     ...(filters.insuranceNames
       ? { insuranceName: { in: filters.insuranceNames } }
       : {}),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AgingBadge } from "@/components/ar/AgingBadge";
@@ -10,12 +10,17 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { MultiSelectDropdown } from "@/components/ui/MultiSelectDropdown";
-import { isPageSize, Pagination } from "@/components/ui/Pagination";
+import {
+  isPageSize,
+  Pagination,
+  PAGE_SIZE_OPTIONS,
+} from "@/components/ui/Pagination";
 import { Select } from "@/components/ui/Select";
 import { SettingsIcon } from "@/components/ui/icons";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
 import { AGING_BUCKETS } from "@/lib/ar-aging";
+import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { isBoolean, useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import type { ClaimDto } from "@/lib/ar-serialize";
 import { formatDate, formatUSD } from "@/lib/format";
@@ -23,6 +28,9 @@ import { formatDate, formatUSD } from "@/lib/format";
 export type TabKey = "all" | "unassigned" | "red" | "blue" | "overdue";
 
 type SortKey = "aging" | "patientName" | "provider" | "balance" | "status";
+
+/** The first of the shared page sizes — 50 rows. */
+const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[0]!;
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "all", label: "All Claims" },
@@ -38,6 +46,26 @@ interface Assignee {
   role: string;
 }
 
+/**
+ * What every filter reads as when nothing is chosen. Declared once: the hook
+ * infers each value's shape from its default, and "clear all" is a reset to
+ * exactly this.
+ */
+const FILTER_DEFAULTS = {
+  tab: "all",
+  insurance: [] as string[],
+  aging: [] as string[],
+  provider: [] as string[],
+  visitStatus: "",
+  dosFrom: "",
+  dosTo: "",
+  search: "",
+  sort: "aging",
+  dir: "desc",
+  page: 1,
+  limit: DEFAULT_PAGE_SIZE,
+};
+
 export function BatchClaimsPanel({
   batchId,
   canAssign,
@@ -45,6 +73,7 @@ export function BatchClaimsPanel({
   assignees,
   insuranceOptions,
   providerOptions,
+  visitStatusOptions,
   initialTab = "all",
 }: {
   batchId: string;
@@ -54,21 +83,40 @@ export function BatchClaimsPanel({
   insuranceOptions: string[];
   /** Both provider fields, merged — the column shows whichever it has. */
   providerOptions: string[];
+  /**
+   * Distinct visit statuses in this batch. Empty for the batches whose EHR
+   * does not export the field, and the filter is then not rendered at all —
+   * an empty dropdown is a promise the data cannot keep.
+   */
+  visitStatusOptions: string[];
   /** Seeded from the URL, so a dashboard count lands on what it counted. */
   initialTab?: TabKey;
 }) {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [tab, setTab] = useState<TabKey>(initialTab);
+  /**
+   * Every filter lives in the query string, so opening a claim and pressing
+   * back restores the list exactly as it was. `initialTab` still seeds the
+   * tab for links that arrive with one — a dashboard count, say — but the URL
+   * wins once the person starts filtering.
+   */
+  const [filters, setFilters, clearFilters] = useFilterState(
+    { ...FILTER_DEFAULTS, tab: initialTab as string },
+    { debounced: ["search"], pageKey: "page" },
+  );
+
+  const tab = filters.tab as TabKey;
+  const sortKey = filters.sort as SortKey;
+  const ascending = filters.dir === "asc";
+  const page = filters.page;
+  const pageSize = filters.limit;
+
   const [claims, setClaims] = useState<ClaimDto[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sortKey, setSortKey] = useState<SortKey>("aging");
-  const [ascending, setAscending] = useState(false);
   const [assignTo, setAssignTo] = useState("");
   const [assigning, setAssigning] = useState(false);
   /**
@@ -87,34 +135,29 @@ export function BatchClaimsPanel({
   );
   const [columnsOpen, setColumnsOpen] = useState(false);
 
-  const [pageSize, setPageSize] = useLocalSetting(
+  /**
+   * Page size is remembered per browser, but a URL that names one wins: a
+   * shared link should show the list the sender was looking at. The stored
+   * preference is applied once, on arrival at a URL that is silent about it.
+   */
+  const [storedPageSize, setStoredPageSize] = useLocalSetting(
     "ar.claims.pageSize",
-    50,
+    DEFAULT_PAGE_SIZE,
     isPageSize,
   );
 
-  const [insuranceFilter, setInsuranceFilter] = useState<string[]>([]);
-  const [agingFilter, setAgingFilter] = useState<string[]>([]);
-  const [providerFilter, setProviderFilter] = useState<string[]>([]);
-  const [dosFrom, setDosFrom] = useState("");
-  const [dosTo, setDosTo] = useState("");
-
-  /**
-   * Typed search is debounced: `search` is what the box shows, `debouncedSearch`
-   * is what the query uses. Firing on every keystroke would put a request in
-   * flight per character and let a slow one land after a faster later one.
-   */
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const appliedStoredSize = useRef(false);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearch(search.trim());
-      setPage(1);
-    }, 300);
+    if (appliedStoredSize.current) return;
+    appliedStoredSize.current = true;
 
-    return () => clearTimeout(timer);
-  }, [search]);
+    const urlNamesSize = new URLSearchParams(window.location.search).has("limit");
+
+    if (!urlNamesSize && storedPageSize !== DEFAULT_PAGE_SIZE) {
+      setFilters({ limit: storedPageSize });
+    }
+  }, [storedPageSize, setFilters]);
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
@@ -128,18 +171,19 @@ export function BatchClaimsPanel({
     if (tab === "blue") params.set("statusCategory", "BLUE");
     if (tab === "overdue") params.set("overdue", "true");
     // Empty means "no filter", so the params are omitted entirely.
-    if (insuranceFilter.length > 0) {
-      params.set("insuranceNames", insuranceFilter.join(","));
+    if (filters.insurance.length > 0) {
+      params.set("insuranceNames", filters.insurance.join(","));
     }
-    if (agingFilter.length > 0) {
-      params.set("agingBuckets", agingFilter.join(","));
+    if (filters.aging.length > 0) {
+      params.set("agingBuckets", filters.aging.join(","));
     }
-    if (providerFilter.length > 0) {
-      params.set("providerNames", providerFilter.join(","));
+    if (filters.provider.length > 0) {
+      params.set("providerNames", filters.provider.join(","));
     }
-    if (dosFrom) params.set("dosFrom", dosFrom);
-    if (dosTo) params.set("dosTo", dosTo);
-    if (debouncedSearch) params.set("search", debouncedSearch);
+    if (filters.visitStatus) params.set("visitStatus", filters.visitStatus);
+    if (filters.dosFrom) params.set("dosFrom", filters.dosFrom);
+    if (filters.dosTo) params.set("dosTo", filters.dosTo);
+    if (filters.search.trim()) params.set("search", filters.search.trim());
     params.set("sort", sortKey);
     params.set("direction", ascending ? "asc" : "desc");
 
@@ -149,12 +193,13 @@ export function BatchClaimsPanel({
     page,
     pageSize,
     tab,
-    insuranceFilter,
-    agingFilter,
-    providerFilter,
-    dosFrom,
-    dosTo,
-    debouncedSearch,
+    filters.insurance,
+    filters.aging,
+    filters.provider,
+    filters.visitStatus,
+    filters.dosFrom,
+    filters.dosTo,
+    filters.search,
     sortKey,
     ascending,
   ]);
@@ -190,34 +235,17 @@ export function BatchClaimsPanel({
   // the old set is no longer meaningful.
   useEffect(() => {
     setSelected(new Set());
-  }, [
-    tab,
-    page,
-    insuranceFilter,
-    agingFilter,
-    providerFilter,
-    dosFrom,
-    dosTo,
-    debouncedSearch,
+  }, [query]);
+
+  // The tab, the sort and the page are how you move through a list rather
+  // than narrow it, so they do not light up "clear all filters".
+  const filtersActive = hasActiveFilters(filters, FILTER_DEFAULTS, [
+    "tab",
+    "sort",
+    "dir",
+    "page",
+    "limit",
   ]);
-
-  const filtersActive =
-    insuranceFilter.length > 0 ||
-    agingFilter.length > 0 ||
-    providerFilter.length > 0 ||
-    dosFrom !== "" ||
-    dosTo !== "" ||
-    search !== "";
-
-  function clearFilters() {
-    setInsuranceFilter([]);
-    setAgingFilter([]);
-    setProviderFilter([]);
-    setDosFrom("");
-    setDosTo("");
-    setSearch("");
-    setPage(1);
-  }
 
   const allOnPageSelected =
     claims.length > 0 && claims.every((claim) => selected.has(claim.id));
@@ -281,10 +309,11 @@ export function BatchClaimsPanel({
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  // A bigger page can leave the cursor past the end of the list.
+  // A bigger page, or a filter that shortened the list, can leave the cursor
+  // past the end of it.
   useEffect(() => {
-    setPage((current) => Math.min(current, totalPages));
-  }, [totalPages]);
+    if (page > totalPages) setFilters({ page: totalPages });
+  }, [page, totalPages, setFilters]);
 
   const SortHeader = ({
     label,
@@ -295,15 +324,14 @@ export function BatchClaimsPanel({
   }) => (
     <button
       type="button"
-      onClick={() => {
-        if (sortKey === sortAs) setAscending((current) => !current);
-        else {
-          setSortKey(sortAs);
-          // Aging reads newest-first; names and amounts read ascending.
-          setAscending(sortAs !== "aging");
-        }
-        setPage(1);
-      }}
+      onClick={() =>
+        setFilters(
+          sortKey === sortAs
+            ? { dir: ascending ? "desc" : "asc" }
+            : // Aging reads newest-first; names and amounts read ascending.
+              { sort: sortAs, dir: sortAs === "aging" ? "desc" : "asc" },
+        )
+      }
       className="inline-flex items-center gap-1 hover:text-slate-800"
     >
       {label}
@@ -318,10 +346,7 @@ export function BatchClaimsPanel({
           <button
             key={entry.key}
             type="button"
-            onClick={() => {
-              setTab(entry.key);
-              setPage(1);
-            }}
+            onClick={() => setFilters({ tab: entry.key })}
             className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
               tab === entry.key
                 ? "border-brand-600 text-brand-700"
@@ -339,11 +364,8 @@ export function BatchClaimsPanel({
             label: name,
             value: name,
           }))}
-          selected={insuranceFilter}
-          onChange={(next) => {
-            setInsuranceFilter(next);
-            setPage(1);
-          }}
+          selected={filters.insurance}
+          onChange={(next) => setFilters({ insurance: next })}
           placeholder="All insurances"
           allLabel="All Insurances"
           noun="insurances"
@@ -356,11 +378,8 @@ export function BatchClaimsPanel({
             label: bucket.label,
             value: bucket.key,
           }))}
-          selected={agingFilter}
-          onChange={(next) => {
-            setAgingFilter(next);
-            setPage(1);
-          }}
+          selected={filters.aging}
+          onChange={(next) => setFilters({ aging: next })}
           placeholder="All ages"
           allLabel="All Ages"
           noun="buckets"
@@ -373,11 +392,8 @@ export function BatchClaimsPanel({
             label: name,
             value: name,
           }))}
-          selected={providerFilter}
-          onChange={(next) => {
-            setProviderFilter(next);
-            setPage(1);
-          }}
+          selected={filters.provider}
+          onChange={(next) => setFilters({ provider: next })}
           placeholder="All providers"
           allLabel="All Providers"
           noun="providers"
@@ -392,12 +408,9 @@ export function BatchClaimsPanel({
           <Input
             id="dosFrom"
             type="date"
-            value={dosFrom}
-            max={dosTo || undefined}
-            onChange={(event) => {
-              setDosFrom(event.target.value);
-              setPage(1);
-            }}
+            value={filters.dosFrom}
+            max={filters.dosTo || undefined}
+            onChange={(event) => setFilters({ dosFrom: event.target.value })}
             className="w-auto"
             aria-label="Date of service from"
           />
@@ -405,23 +418,41 @@ export function BatchClaimsPanel({
           <Input
             id="dosTo"
             type="date"
-            value={dosTo}
-            min={dosFrom || undefined}
-            onChange={(event) => {
-              setDosTo(event.target.value);
-              setPage(1);
-            }}
+            value={filters.dosTo}
+            min={filters.dosFrom || undefined}
+            onChange={(event) => setFilters({ dosTo: event.target.value })}
             className="w-auto"
             aria-label="Date of service to"
           />
         </div>
 
+        {/*
+          Only rendered when this batch actually carries visit statuses. Most
+          EHR exports do not include the field, and a dropdown with nothing in
+          it is worse than no dropdown.
+        */}
+        {visitStatusOptions.length > 0 ? (
+          <Select
+            value={filters.visitStatus}
+            onChange={(event) => setFilters({ visitStatus: event.target.value })}
+            aria-label="Visit status"
+            className="w-auto min-w-[160px]"
+          >
+            <option value="">All visit statuses</option>
+            {visitStatusOptions.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </Select>
+        ) : null}
+
         <Input
           type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search patient name or CPT..."
-          aria-label="Search patient name or CPT"
+          value={filters.search}
+          onChange={(event) => setFilters({ search: event.target.value })}
+          placeholder="Search patient name, CPT or Visit ID..."
+          aria-label="Search patient name, CPT or Visit ID"
           className="w-auto min-w-[220px]"
         />
 
@@ -691,10 +722,12 @@ export function BatchClaimsPanel({
             totalPages={totalPages}
             totalItems={total}
             pageSize={pageSize}
-            onPageChange={setPage}
+            onPageChange={(next) => setFilters({ page: next })}
             onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPage(1);
+              // Remembered for the next visit, and carried in this URL so a
+              // shared link opens the same view.
+              setStoredPageSize(size);
+              setFilters({ limit: size, page: 1 });
             }}
             noun="claims"
             filtered={filtersActive}
