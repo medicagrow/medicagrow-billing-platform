@@ -1,32 +1,16 @@
-import type { Metadata } from "next";
-import { notFound } from "next/navigation";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { TimeLogsClient } from "@/components/productivity/TimeLogsClient";
-import { canManageBatches } from "@/lib/ar-access";
-import { prisma } from "@/lib/prisma";
-import { requireUser } from "@/lib/session";
-import { activeTaskTypes, taskPracticeOptions } from "@/lib/task-options";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = { title: "Time Logs" };
-export const dynamic = "force-dynamic";
-
-const list = (value?: string) =>
-  (value ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry !== "");
-
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-
-export default async function TimeLogsPage({
+/**
+ * The Time Log became the Session Log under Analytics — the same sessions,
+ * the same aggregation, with the flags and edit history alongside.
+ *
+ * The old query string is translated rather than dropped: this page was linked
+ * to with a person and a task type already chosen, and landing on an unfiltered
+ * month would quietly answer a different question from the one asked.
+ */
+export default function TimeLogsPage({
   searchParams,
 }: {
-  /**
-   * The productivity table links in here with a person and a task type
-   * already chosen, so those arrive as query params. `userId`/`taskTypeId`
-   * are the singular forms that link uses; the plural forms carry a fuller
-   * selection.
-   */
   searchParams: {
     userId?: string;
     userIds?: string;
@@ -37,55 +21,30 @@ export default async function TimeLogsPage({
     to?: string;
   };
 }) {
-  const user = await requireUser();
+  const params = new URLSearchParams();
 
-  if (!canManageBatches(user)) notFound();
+  const join = (plural?: string, singular?: string) =>
+    [...(plural ? plural.split(",") : []), ...(singular ? [singular] : [])]
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .join(",");
 
-  const [billers, practices, taskTypes] = await Promise.all([
-    // Anyone who can run a timer can appear in the report, not just Billers —
-    // PMs log time against tasks too.
-    prisma.user.findMany({
-      where: { isActive: true },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    }),
-    taskPracticeOptions(user),
-    activeTaskTypes(),
-  ]);
+  if (searchParams.from) params.set("from", searchParams.from);
+  if (searchParams.to) params.set("to", searchParams.to);
 
-  return (
-    <div className="mx-auto max-w-7xl">
-      <PageHeader
-        title="Time Logs & Efficiency"
-        description="Logged time against estimates, per biller, practice and task type."
-      />
+  // The report's filter is `billerIds`; this page called the same thing
+  // `userId`/`userIds`.
+  const billerIds = join(searchParams.userIds, searchParams.userId);
+  if (billerIds) params.set("billerIds", billerIds);
 
-      <TimeLogsClient
-        billers={billers}
-        practices={practices}
-        taskTypes={taskTypes}
-        initialUserIds={[
-          ...list(searchParams.userIds),
-          ...(searchParams.userId ? [searchParams.userId] : []),
-        ]}
-        initialTaskTypeIds={[
-          ...list(searchParams.taskTypeIds),
-          ...(searchParams.taskTypeId ? [searchParams.taskTypeId] : []),
-        ]}
-        initialPracticeIds={list(searchParams.practiceIds).filter((id) =>
-          practices.some((practice) => practice.id === id),
-        )}
-        initialFrom={
-          searchParams.from && ISO_DATE.test(searchParams.from)
-            ? searchParams.from
-            : undefined
-        }
-        initialTo={
-          searchParams.to && ISO_DATE.test(searchParams.to)
-            ? searchParams.to
-            : undefined
-        }
-      />
-    </div>
-  );
+  const taskTypeIds = join(searchParams.taskTypeIds, searchParams.taskTypeId);
+  if (taskTypeIds) params.set("taskTypeIds", taskTypeIds);
+
+  if (searchParams.practiceIds) {
+    params.set("practiceIds", searchParams.practiceIds);
+  }
+
+  const query = params.toString();
+
+  redirect(`/analytics/session-log${query ? `?${query}` : ""}`);
 }

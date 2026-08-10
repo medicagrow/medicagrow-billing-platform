@@ -2,6 +2,14 @@ import { TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { getTaskLabel } from "@/lib/task/task-label";
 import { UNTYPED, type AnalyticsFilters } from "@/lib/analytics/shared";
+import {
+  SEVERE_OCCURRENCES,
+  THRESHOLDS,
+  type DetectedPattern,
+  type FlaggedSession,
+  type SuspiciousActivityResult,
+  type SuspiciousFlag,
+} from "@/lib/analytics/flags";
 
 /**
  * Timer behaviour that does not add up.
@@ -17,82 +25,17 @@ import { UNTYPED, type AnalyticsFilters } from "@/lib/analytics/shared";
  * re-reads history correctly instead of leaving old rows behind.
  */
 
-export const FLAG_TYPES = [
-  "SHORT_TIMER",
-  "EXTREME_OVERRUN",
-  "NO_PRODUCTIVITY",
-  "PATTERN",
-] as const;
+export {
+  FLAG_TYPES,
+  FLAG_LABELS,
+  THRESHOLDS,
+  SEVERE_OCCURRENCES,
+  type SuspiciousFlag,
+  type FlaggedSession,
+  type DetectedPattern,
+  type SuspiciousActivityResult,
+} from "@/lib/analytics/flags";
 
-export type SuspiciousFlag = (typeof FLAG_TYPES)[number];
-
-export const FLAG_LABELS: Record<SuspiciousFlag, string> = {
-  SHORT_TIMER: "Short timer",
-  EXTREME_OVERRUN: "Extreme overrun",
-  NO_PRODUCTIVITY: "Closed without count",
-  PATTERN: "Repeated pattern",
-};
-
-/**
- * The thresholds, in one place so the page and the report agree and so
- * changing one is a single edit.
- *
- *  - A session under five minutes against an estimate of half an hour or more
- *    is too short to have been the work.
- *  - Three times the estimate is past "it took longer" and into "something
- *    else happened".
- *  - Three occurrences of the same flag for the same person and kind of work
- *    stops being an accident.
- */
-export const THRESHOLDS = {
-  shortTimerMaxMinutes: 5,
-  shortTimerMinEstimate: 30,
-  overrunMultiple: 3,
-  patternOccurrences: 3,
-} as const;
-
-export interface FlaggedSession {
-  /** Stable across recomputation, so a dismissal sticks to the same finding. */
-  flagKey: string;
-  flagType: SuspiciousFlag;
-  timeLogId: string | null;
-  taskId: string;
-  taskLabel: string;
-  practiceId: string | null;
-  practiceName: string | null;
-  taskTypeId: string | null;
-  taskTypeName: string;
-  billerId: string;
-  billerName: string;
-  occurredAt: string;
-  estimatedMinutes: number | null;
-  loggedMinutes: number;
-  productivityCount: number | null;
-  dismissed: boolean;
-  dismissedByName: string | null;
-}
-
-export interface DetectedPattern {
-  flagKey: string;
-  billerId: string;
-  billerName: string;
-  taskTypeId: string | null;
-  taskTypeName: string;
-  flagType: SuspiciousFlag;
-  occurrences: number;
-  dates: string[];
-  severity: "amber" | "red";
-  dismissed: boolean;
-}
-
-export interface SuspiciousActivityResult {
-  sessions: FlaggedSession[];
-  patterns: DetectedPattern[];
-  summary: Record<SuspiciousFlag, number>;
-}
-
-/** Five or more of the same thing is worse than three. */
-const SEVERE_OCCURRENCES = 5;
 
 export async function getSuspiciousActivity(
   params: AnalyticsFilters & { flagTypes?: SuspiciousFlag[] },

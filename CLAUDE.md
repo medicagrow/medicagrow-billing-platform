@@ -425,10 +425,125 @@ npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
 - `/api/ar/claims` narrows **billers** to their own claims; PMs and Owners see
   the whole batch.
 
+## Analytics module
+
+Five reports under `/analytics`, Owner and PM only, built on
+[lib/analytics/](lib/analytics/). They replaced the Team Productivity page and
+the Time Log page, which are now **redirects** — `/productivity` →
+`/analytics/time-productivity`, `/productivity/time-logs` →
+`/analytics/session-log`, each translating its old query string on the way
+through, since both were linked to with a person and a date range already
+chosen. `/productivity/[userId]` and `.../detail` survive as the per-person
+drill-down; the way in is now a biller row on the Time & Productivity report.
+
+- **One vocabulary, five reports.** [lib/analytics/shared.ts](lib/analytics/shared.ts)
+  owns `Measures`, `efficiencyRate()`, `secondsPerUnit()`, `sessionWhere()` and
+  `closedTaskWhere()`. No report works a rate out a second way, so no two can
+  disagree about the same window.
+- **Grouped queries, never one per user.** Every provider takes id arrays and
+  returns results keyed by id — the rule from the performance audit, and the
+  reason a report over thirty billers is still a fixed number of round trips.
+- Filters are the same everywhere and live in the **URL**, through
+  `ANALYTICS_FILTER_DEFAULTS` / `useAnalyticsFilters()` in
+  [components/analytics/AnalyticsShell.tsx](components/analytics/AnalyticsShell.tsx).
+  A named period (`this_week`, `last_month`, …) **resolves to real dates the
+  moment it is chosen** and the URL carries those, so a link sent on Friday
+  still opens on the week it meant. [lib/analytics/periods.ts](lib/analytics/periods.ts)
+  is free of React so a server component can resolve one too.
+- Every route is `requireRole([OWNER, PROJECT_MANAGER])` and narrows the
+  requested practices through `narrowPractices()` in
+  [lib/analytics/request.ts](lib/analytics/request.ts) — a hand-edited query
+  string cannot widen a PM's scope.
+- **Flag vocabulary is Prisma-free.** `FLAG_TYPES`, `FLAG_LABELS`, `THRESHOLDS`
+  and the result shapes live in [lib/analytics/flags.ts](lib/analytics/flags.ts);
+  `suspicious-activity.ts` adds the queries and re-exports them. Importing the
+  query module from a client component pulls `pg` into the browser bundle and
+  fails the build — this happened, and this is the fix.
+
+### The five reports
+
+- **Time & Productivity** (`/analytics/time-productivity`) — time against
+  output, nested three deep. `HIERARCHY` in
+  [lib/analytics/time-productivity.ts](lib/analytics/time-productivity.ts) maps
+  each Group By choice to its nesting order; the cells are computed once and
+  folded, so switching the grouping re-nests rather than re-queries. An
+  estimate is counted **once per task per group**, not once per session.
+- **Workload Planner** (`/analytics/workload`) — assigned hours per biller per
+  day. Past days read from `TaskTimeLog`, today and later from assigned
+  estimates **plus `projectRecurringTasks()`**. Projected load is drawn hatched
+  over the same colour, so a full day of forecast never reads as a full day of
+  committed work.
+- **Resource Requirements** (`/analytics/resource-requirements`) — what each
+  practice committed to against the hours booked to deliver it, per **month**,
+  because a `PracticeRequirement` is per month and measuring a monthly
+  commitment over eleven days compares unlike things. `unitsPerMonth` comes
+  from three months of closed-task history and is **null when there is none**,
+  never zero.
+- **Suspicious Activity** (`/analytics/suspicious-activity`) — see below.
+- **Session Log** (`/analytics/session-log`) — every timer session behind the
+  other four, with its edit history and flags. "Flagged only" cannot be a
+  database filter (flags are derived), so that one case reads the window and
+  pages in memory; everything else pages in SQL.
+
+### Recurring-task projection
+
+[lib/task/workload-projection.ts](lib/task/workload-projection.ts) answers
+"what *would* be due" without writing anything. It exists because an occurrence
+is only created on its due date, so a forward-looking plan has nothing to read.
+
+- `projectRecurringTasks(from, to, filters?)` walks each active parent's
+  `recurringConfig` through all four frequencies — daily (business days only,
+  via `nextBusinessDay()`), weekly, bi-weekly and monthly — from
+  `nextDueDate` forward, stopping at `endDate`, the window, or `MAX_STEPS`.
+- **It never writes.** No `create`, no advancing of `nextDueDate`. A report
+  must not change the schedule it is reporting on.
+- Dates where a real child instance already exists are **skipped**, found by
+  one query across every parent rather than one per parent.
+
+### Suspicious activity
+
+Every flag is a **question, not an accusation**, which is why each can be
+dismissed and why the dismissal is recorded with a name. Flags are recomputed
+from the logs on every request rather than stored, so changing a threshold
+re-reads history correctly instead of leaving stale rows behind.
+
+- Four types, thresholds in `THRESHOLDS`:
+  - `SHORT_TIMER` — under **5 minutes** logged against an estimate of **30
+    minutes or more**.
+  - `EXTREME_OVERRUN` — **3× the estimate** or worse.
+  - `NO_PRODUCTIVITY` — closed with time logged but no units recorded.
+  - `PATTERN` — **3 or more** of the same flag for the same person and task
+    type; 5 or more is red rather than amber. Only `SHORT_TIMER` and
+    `NO_PRODUCTIVITY` roll into patterns — an overrun repeats for honest
+    reasons.
+- What is stored is only the **decision to stop showing a flag**:
+  `AnalyticsFlagDismissal`, keyed by a `flagKey` that identifies the same
+  finding next time (`SHORT_TIMER:<timeLogId>`, `PATTERN:<type>:<biller>:<type>`).
+- "Flag for review" files a real `Task` for the manager, carrying the **task
+  type of the work it is about**. There is no dedicated review type, and
+  seeding one would put a row in a list the owner curates.
+
+### Practice requirements
+
+`PracticeRequirement` (practice × task type → `monthlyHours`, unique on the
+pair) is the source the resource report measures against. Set on the **Monthly
+Requirements** tab of a practice's settings page.
+
+- A **blank** field clears the requirement (DELETE); **0** is a real
+  commitment of no hours. The distinction is the same one `PercentInput` and
+  the tracker form keep, and the report relies on it — a practice with no
+  requirement reads "unset", not "short".
+
+```bash
+npx tsx scripts/test-projection.ts          # all 4 frequencies, skips real instances, endDate
+npx tsx scripts/test-suspicious-activity.ts # each flag type against its threshold
+```
+
 ## Productivity module
 
 Cross-module reporting lives in [lib/productivity/](lib/productivity/) and is
-built to take more modules without touching the routes or pages.
+built to take more modules without touching the routes or pages. It still backs
+the per-person `/productivity/[userId]` pages and the AR dashboard.
 
 - To add a module: write `getXProductivity` / `getXActivityDetail` /
   `getXRecentActivity` and add them to the three arrays in
@@ -456,10 +571,9 @@ built to take more modules without touching the routes or pages.
 - The task-type breakdown shows only types with a **closed** task in the
   window — the question is what got finished. Time on a type that closed
   nothing still counts towards the total.
-- `/productivity` filters live in the **URL** (`preset`/`from`/`to`,
-  `userIds`, `practiceIds`), so the page stays a server component and any view
-  of the report is a link. Both lists are re-narrowed against
-  `accessiblePracticeIds()` server-side.
+- The per-person pages' filters live in the **URL** (`preset`/`from`/`to`,
+  `practiceId`), so they stay server components and any view is a link. The
+  practice list is re-narrowed against `accessiblePracticeIds()` server-side.
 - The **AR dashboard's biller panel** is `arBillerActivity()` in
   [lib/ar-summary.ts](lib/ar-summary.ts), shared by the page and
   `/api/ar/dashboard`. Note counts and the roster are both practice-scoped: a
@@ -479,10 +593,11 @@ npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
 
 ### Time Log & Efficiency
 
-`/productivity/time-logs`, Owner and PM only. The aggregation lives in
-[lib/time-analysis.ts](lib/time-analysis.ts) and is shared by
+The aggregation in [lib/time-analysis.ts](lib/time-analysis.ts) is shared by
 `GET /api/time-logs/summary` and `GET /api/time-logs/sessions`, so the totals
-and the rows behind them cannot disagree.
+and the rows behind them cannot disagree. Its page is now
+`/analytics/session-log`; the rules below still hold, and the analytics
+reports read time the same way.
 
 - **Sessions are the unit of time; tasks are the unit of estimate.** Logged
   minutes come from `task_time_logs`; the estimate is one number on the task.

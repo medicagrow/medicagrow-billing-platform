@@ -88,10 +88,10 @@ export default async function BillerProductivityPage({
         action={
           isManager ? (
             <Link
-              href="/productivity"
+              href="/analytics/time-productivity"
               className="text-sm font-medium text-brand-700 hover:text-brand-800"
             >
-              ← Back to Team Productivity
+              ← Back to Time &amp; Productivity
             </Link>
           ) : null
         }

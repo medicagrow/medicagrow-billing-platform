@@ -98,8 +98,11 @@ export default async function ActivityDetailPage({
       <nav className="mb-3 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
         {isManager ? (
           <>
-            <Link href="/productivity" className="hover:text-brand-700">
-              Team Productivity
+            <Link
+              href="/analytics/time-productivity"
+              className="hover:text-brand-700"
+            >
+              Time &amp; Productivity
             </Link>
             <span>/</span>
           </>

@@ -83,10 +83,11 @@ export const navItems: NavItem[] = [
     accent: "sky",
   },
   {
-    label: "Productivity",
-    href: "/productivity",
+    label: "Analytics",
+    href: "/analytics",
     icon: ProductivityIcon,
-    description: "Work output per team member across every module.",
+    description:
+      "Time against output, workload planning and timer anomalies.",
     accent: "sky",
     roles: [Role.OWNER, Role.PROJECT_MANAGER],
   },
@@ -104,7 +105,7 @@ export const moduleItems = navItems.filter(
   (item) =>
     item.href !== "/" &&
     item.href !== "/settings" &&
-    item.href !== "/productivity",
+    item.href !== "/analytics",
 );
 
 /** Top-level nav filtered to what this role may see. */
@@ -224,17 +225,27 @@ export const taskSubNav: SubNavItem[] = [
   },
 ];
 
-export const productivitySubNav: SubNavItem[] = [
+/** Everything under Analytics is management reporting — no biller sees it. */
+const MANAGERS: Role[] = [Role.OWNER, Role.PROJECT_MANAGER];
+
+export const analyticsSubNav: SubNavItem[] = [
   {
-    label: "Team",
-    href: "/productivity",
-    roles: [Role.OWNER, Role.PROJECT_MANAGER],
+    label: "Time & Productivity",
+    href: "/analytics/time-productivity",
+    roles: MANAGERS,
+  },
+  { label: "Workload Planner", href: "/analytics/workload", roles: MANAGERS },
+  {
+    label: "Resource Requirements",
+    href: "/analytics/resource-requirements",
+    roles: MANAGERS,
   },
   {
-    label: "Time Logs",
-    href: "/productivity/time-logs",
-    roles: [Role.OWNER, Role.PROJECT_MANAGER],
+    label: "Suspicious Activity",
+    href: "/analytics/suspicious-activity",
+    roles: MANAGERS,
   },
+  { label: "Session Log", href: "/analytics/session-log", roles: MANAGERS },
 ];
 
 /** Sub-navigation keyed by the parent nav item's href. */
@@ -244,7 +255,7 @@ const SUB_NAV_BY_PARENT: Record<string, SubNavItem[]> = {
   "/tracker": trackerSubNav,
   "/tasks": taskSubNav,
   "/todos": todoSubNav,
-  "/productivity": productivitySubNav,
+  "/analytics": analyticsSubNav,
   "/settings": settingsSubNav,
 };
 
