@@ -114,6 +114,10 @@ model User {
 
   trackerConfigUpdates TrackerConfig[] @relation("TrackerConfigUpdatedBy")
 
+  requirementsCreated PracticeRequirement[]    @relation("RequirementCreatedBy")
+  requirementsUpdated PracticeRequirement[]    @relation("RequirementUpdatedBy")
+  flagsDismissed      AnalyticsFlagDismissal[] @relation("FlagDismissedBy")
+
   @@index([role])
 }
 
@@ -157,6 +161,7 @@ model Practice {
   trackerEntries TrackerEntry[]
   todos          Todo[]
   tasks          Task[]
+  requirements   PracticeRequirement[]
 
   @@index([ehrSource])
   @@index([isActive])
@@ -825,7 +830,8 @@ model TaskType {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tasks Task[]
+  tasks        Task[]
+  requirements PracticeRequirement[]
 
   @@index([isActive, sortOrder])
   @@map("task_types")
@@ -907,4 +913,60 @@ model TrackerConfig {
   updatedBy User? @relation("TrackerConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@map("tracker_config")
+}
+
+/**
+ * ========================================================================== *
+ * Analytics                                                                 *
+ * ==========================================================================
+ */
+
+/// How much of a task type a practice needs each month.
+///
+/// The number the PM commits to, not one derived from history: it is what the
+/// resource report measures assigned work against, so it has to be a decision
+/// somebody made rather than an average that drifts.
+model PracticeRequirement {
+  id           String   @id @default(cuid())
+  practiceId   String
+  taskTypeId   String
+  /// Hours per month. Decimal because half-hours are ordinary here.
+  monthlyHours Decimal  @db.Decimal(8, 2)
+  /// Why this number — "based on ~400 charges/month".
+  notes        String?
+  createdById  String
+  updatedById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  practice  Practice @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+  taskType  TaskType @relation(fields: [taskTypeId], references: [id], onDelete: Cascade)
+  createdBy User     @relation("RequirementCreatedBy", fields: [createdById], references: [id])
+  updatedBy User?    @relation("RequirementUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  /// One number per practice per task type — the upsert key.
+  @@unique([practiceId, taskTypeId])
+  @@index([taskTypeId])
+  @@map("practice_requirements")
+}
+
+/// A suspicious-activity flag somebody has looked at and set aside.
+///
+/// Flags are *derived* — recomputed from the time logs on every request — so
+/// there is nothing to mark as read on the flag itself. What is stored is the
+/// decision to stop showing it, keyed by a string that identifies the same
+/// finding on the next recomputation.
+model AnalyticsFlagDismissal {
+  id            String   @id @default(cuid())
+  /// "SHORT_TIMER:<timeLogId>", "PATTERN:<userId>:<taskTypeId>", and so on.
+  flagKey       String   @unique
+  flagType      String
+  note          String?
+  dismissedById String
+  dismissedAt   DateTime @default(now())
+
+  dismissedBy User @relation("FlagDismissedBy", fields: [dismissedById], references: [id])
+
+  @@index([flagType])
+  @@map("analytics_flag_dismissals")
 }

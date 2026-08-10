@@ -20,6 +20,8 @@ import { Select } from "@/components/ui/Select";
 import { useToast } from "@/components/ui/toast";
 import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
 import { EhrSource } from "@/lib/generated/prisma/enums";
+import { PracticeRequirementsTab } from "@/components/settings/PracticeRequirementsTab";
+import type { TaskTypeOption } from "@/components/task/TaskFormFields";
 
 export interface PracticeDetail {
   id: string;
@@ -59,13 +61,19 @@ export interface ProviderRow {
   isActive: boolean;
 }
 
-type TabKey = "general" | "billing" | "contact" | "providers";
+type TabKey =
+  | "general"
+  | "billing"
+  | "contact"
+  | "providers"
+  | "requirements";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "general", label: "General" },
   { key: "billing", label: "Billing Address" },
   { key: "contact", label: "Contact" },
   { key: "providers", label: "Provider Roster" },
+  { key: "requirements", label: "Monthly Requirements" },
 ];
 
 function Field({
@@ -94,9 +102,12 @@ export function PracticeDetailTabs({
   projectManagers,
   canEdit,
   canAssignPm = false,
+  taskTypes,
 }: {
   practice: PracticeDetail;
   providers: ProviderRow[];
+  /** Every active task type — one requirement row each. */
+  taskTypes: TaskTypeOption[];
   /** Only project managers may own a practice's escalations. */
   projectManagers: PmOption[];
   canEdit: boolean;
@@ -473,6 +484,14 @@ export function PracticeDetailTabs({
       ) : null}
 
       {/* -------------------------- Provider Roster -------------------------- */}
+      {tab === "requirements" ? (
+        <PracticeRequirementsTab
+          practiceId={practice.id}
+          taskTypes={taskTypes}
+          canEdit={canEdit}
+        />
+      ) : null}
+
       {tab === "providers" ? (
         <ProviderRoster
           practiceId={practice.id}

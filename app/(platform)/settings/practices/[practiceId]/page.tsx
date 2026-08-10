@@ -12,6 +12,7 @@ import { Role } from "@/lib/generated/prisma/enums";
 import { formatPhone } from "@/lib/phone";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
+import { activeTaskTypes } from "@/lib/task-options";
 import { displayEin, displayZip } from "@/lib/validations/identifiers";
 
 export const metadata: Metadata = { title: "Practice Detail" };
@@ -44,11 +45,15 @@ export default async function PracticeDetailPage({
   if (accessible !== null && !accessible.includes(practice.id)) notFound();
 
   // Stored normalised; formatted for display on the way in.
-  const projectManagers = await prisma.user.findMany({
-    where: { role: Role.PROJECT_MANAGER, isActive: true },
-    orderBy: { name: "asc" },
-    select: { id: true, name: true },
-  });
+  const [projectManagers, taskTypes] = await Promise.all([
+    prisma.user.findMany({
+      where: { role: Role.PROJECT_MANAGER, isActive: true },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+    // One requirement row per active type, in the owner's chosen order.
+    activeTaskTypes(),
+  ]);
 
   const detail: PracticeDetail = {
     id: practice.id,
@@ -109,6 +114,7 @@ export default async function PracticeDetailPage({
         // who escalations route to.
         canEdit={canManageBatches(user)}
         canAssignPm={user.role === Role.OWNER}
+        taskTypes={taskTypes}
       />
     </div>
   );
