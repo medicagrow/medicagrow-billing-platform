@@ -194,7 +194,13 @@ other and must not be merged.
   [lib/task/recurrence-config.ts](lib/task/recurrence-config.ts) skips Saturday
   and Sunday, and a series set up over a weekend starts on the Monday. Weekly
   and bi-weekly already name their days and monthly lands on a date, so daily
-  was the one frequency that had to be told. `scripts/fix-daily-recurring-weekends.ts`
+  was the one frequency that had to be told.
+  - **Both generators read the mark through `dueDateFor()`**, never raw.
+    Advancing correctly is not enough on its own: the sweep runs whenever a
+    page is loaded, including at the weekend, and a mark already sitting on a
+    Saturday — left by the old rule, or by a hand-edited config — would
+    otherwise become a Saturday task. A mark found on a weekend is corrected
+    and stored, so it is repaired once rather than re-read every sweep. `scripts/fix-daily-recurring-weekends.ts`
   moves any weekend occurrence left by the old rule onto the following Monday —
   OPEN instances only, since a closed one is a record of work that happened.
 - **A recurring parent never appears in a task list.** `GET /api/tasks`

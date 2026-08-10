@@ -127,6 +127,36 @@ export function nextBusinessDay(date: Date): Date {
   return next;
 }
 
+/**
+ * `date` itself when it is a working day, otherwise the Monday after it.
+ *
+ * Distinct from `nextBusinessDay()`, which always moves at least one day.
+ * This one repairs a date rather than advancing past it — a mark left on a
+ * Saturday by the old every-day rule has to become Monday, not Tuesday.
+ */
+export function businessDayOnOrAfter(date: Date): Date {
+  const cursor = new Date(date.getTime());
+  while (isWeekend(cursor)) cursor.setUTCDate(cursor.getUTCDate() + 1);
+  return cursor;
+}
+
+/**
+ * The date an occurrence would actually carry — never a weekend for a daily
+ * series, whatever the stored mark says.
+ *
+ * The generators read this rather than the raw `nextDueDate`, so a mark that
+ * is already on a Saturday cannot produce a Saturday task no matter which day
+ * the sweep happens to run on. Weekly and bi-weekly name their own days and
+ * monthly lands on a date, so only daily is corrected.
+ */
+export function dueDateFor(config: RecurringConfig, iso: string): string {
+  if (config.frequency !== "daily") return iso;
+
+  const date = toUtcDate(iso);
+
+  return isWeekend(date) ? toIsoDate(businessDayOnOrAfter(date)) : iso;
+}
+
 export function nextOccurrence(
   config: RecurringConfig,
   from: Date,

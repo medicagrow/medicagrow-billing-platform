@@ -12,6 +12,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { config } from "dotenv";
 import {
   describeRecurrence,
+  dueDateFor,
   isWeekend,
   nextBusinessDay,
   nextOccurrence,
@@ -139,6 +140,41 @@ console.log("=== recurrence dates ===");
     "describes a weekday pattern",
     describeRecurrence(weekdays) === "Weekly on Mon, Tue, Wed, Thu, Fri",
     describeRecurrence(weekdays),
+  );
+
+  /**
+   * The generators read the mark through dueDateFor(), so a mark already
+   * sitting on a weekend cannot produce a weekend task whichever day the
+   * sweep runs on. 2026-08-01 is a Saturday, 08-02 a Sunday, 08-03 a Monday.
+   */
+  check(
+    "a Saturday mark reads as the Monday",
+    dueDateFor(daily, "2026-08-01") === "2026-08-03",
+    dueDateFor(daily, "2026-08-01"),
+  );
+  check(
+    "a Sunday mark reads as the Monday",
+    dueDateFor(daily, "2026-08-02") === "2026-08-03",
+    dueDateFor(daily, "2026-08-02"),
+  );
+  check(
+    "a weekday mark is left alone",
+    dueDateFor(daily, "2026-08-04") === "2026-08-04",
+  );
+  // Weekly and bi-weekly already name their days; monthly lands on a date.
+  check(
+    "a weekly series keeps its own weekend day",
+    dueDateFor(
+      { frequency: "weekly" as const, daysOfWeek: [6], nextDueDate: "2026-08-01" },
+      "2026-08-01",
+    ) === "2026-08-01",
+  );
+  check(
+    "and a monthly one keeps its date",
+    dueDateFor(
+      { frequency: "monthly" as const, dayOfMonth: 1, nextDueDate: "2026-08-01" },
+      "2026-08-01",
+    ) === "2026-08-01",
   );
 
   check("malformed config parses to null", parseRecurringConfig({ x: 1 }) === null);
@@ -350,6 +386,148 @@ async function main() {
     (await mark(parent.id)) === afterFirst,
     await mark(parent.id),
   );
+
+  console.log("\n=== a weekend mark never becomes a weekend task ===");
+  {
+    /**
+     * The sweep runs whenever somebody loads a page, including at the weekend.
+     * These series are given marks that sit on a Saturday and a Sunday — the
+     * state the old every-day rule left behind — and neither may produce a
+     * weekend occurrence.
+     */
+    const lastSaturday = (() => {
+      const back = new Date(todayUtc.getTime());
+      while (back.getUTCDay() !== 6) back.setUTCDate(back.getUTCDate() - 1);
+      return back;
+    })();
+
+    const lastSunday = new Date(lastSaturday.getTime() + 86_400_000);
+    const mondayAfter = new Date(lastSaturday.getTime() + 2 * 86_400_000);
+
+    const onWeekend = async (label: string, mark: Date) => {
+      const series = await prisma.task.create({
+        data: {
+          title: `ZZ Recurring ${label}`,
+          createdById: owner.id,
+          assignedToId: assignee.id,
+          isRecurring: true,
+          recurringConfig: { frequency: "daily", nextDueDate: toIsoDate(mark) },
+        },
+      });
+
+      await generateDueInstances({ assignedToId: assignee.id });
+
+      const instances = await prisma.task.findMany({
+        where: { parentTaskId: series.id },
+        select: { dueDate: true },
+        orderBy: { dueDate: "asc" },
+      });
+
+      return { series, instances };
+    };
+
+    const saturday = await onWeekend("saturday mark", lastSaturday);
+
+    check(
+      "a Saturday mark produces no Saturday task",
+      saturday.instances.every(
+        (task) => task.dueDate !== null && !isWeekend(task.dueDate),
+      ),
+      saturday.instances
+        .map((task) => toIsoDate(task.dueDate!))
+        .join(", ") || "none",
+    );
+    check(
+      "its earliest occurrence is the Monday",
+      saturday.instances.length === 0 ||
+        toIsoDate(saturday.instances[0]!.dueDate!) === toIsoDate(mondayAfter),
+      saturday.instances.length === 0
+        ? "none"
+        : toIsoDate(saturday.instances[0]!.dueDate!),
+    );
+    check(
+      "and its mark is off the weekend",
+      !isWeekend(toUtcDate(await mark(saturday.series.id))),
+      await mark(saturday.series.id),
+    );
+
+    const sunday = await onWeekend("sunday mark", lastSunday);
+
+    check(
+      "a Sunday mark produces no Sunday task",
+      sunday.instances.every(
+        (task) => task.dueDate !== null && !isWeekend(task.dueDate),
+      ),
+      sunday.instances.map((task) => toIsoDate(task.dueDate!)).join(", ") ||
+        "none",
+    );
+    check(
+      "and its mark is off the weekend",
+      !isWeekend(toUtcDate(await mark(sunday.series.id))),
+      await mark(sunday.series.id),
+    );
+
+    /**
+     * Closing a task is the other way an occurrence is scheduled. A Friday
+     * close must reach Monday, and a series whose mark somehow landed on a
+     * Saturday must be corrected rather than acted on.
+     */
+    console.log("\n=== closing on a Friday schedules the Monday ===");
+
+    const friday = new Date(lastSaturday.getTime() - 86_400_000);
+
+    const closing = await prisma.task.create({
+      data: {
+        title: "ZZ Recurring friday close",
+        createdById: owner.id,
+        assignedToId: assignee.id,
+        isRecurring: true,
+        recurringConfig: { frequency: "daily", nextDueDate: toIsoDate(friday) },
+      },
+    });
+
+    await createNextInstance(await reload(closing.id));
+
+    check(
+      "the mark after a Friday occurrence is the Monday",
+      (await mark(closing.id)) === toIsoDate(mondayAfter),
+      await mark(closing.id),
+    );
+
+    const fromSaturday = await prisma.task.create({
+      data: {
+        title: "ZZ Recurring saturday close",
+        createdById: owner.id,
+        assignedToId: assignee.id,
+        isRecurring: true,
+        recurringConfig: {
+          frequency: "daily",
+          nextDueDate: toIsoDate(lastSaturday),
+        },
+      },
+    });
+
+    await createNextInstance(await reload(fromSaturday.id));
+
+    const saturdayInstances = await prisma.task.findMany({
+      where: { parentTaskId: fromSaturday.id },
+      select: { dueDate: true },
+    });
+
+    check(
+      "closing against a Saturday mark writes no Saturday task",
+      saturdayInstances.every(
+        (task) => task.dueDate !== null && !isWeekend(task.dueDate),
+      ),
+      saturdayInstances.map((task) => toIsoDate(task.dueDate!)).join(", ") ||
+        "none",
+    );
+    check(
+      "and its mark is off the weekend",
+      !isWeekend(toUtcDate(await mark(fromSaturday.id))),
+      await mark(fromSaturday.id),
+    );
+  }
 
   console.log("\n=== closing the parent closes the series ===");
 

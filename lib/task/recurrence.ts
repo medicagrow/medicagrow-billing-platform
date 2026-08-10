@@ -7,6 +7,7 @@ import {
 } from "@/lib/lazy-schedule";
 import { dayStart } from "@/lib/todo/access";
 import {
+  dueDateFor,
   nextOccurrence,
   parseRecurringConfig,
   toIsoDate,
@@ -132,10 +133,24 @@ export async function createNextInstance(parent: Task): Promise<Task | null> {
 
   if (config.endDate && config.nextDueDate > config.endDate) return null;
 
-  // Not due yet: the mark already names it, so there is nothing to do.
-  if (config.nextDueDate > toIsoDate(dayStart())) return null;
+  /**
+   * A daily mark sitting on a weekend is corrected before anything is written
+   * — closing a task on a Friday must schedule the next one for Monday, not
+   * for the Saturday the raw arithmetic would have reached.
+   */
+  const dueIso = dueDateFor(config, config.nextDueDate);
 
-  const dueDate = toUtcDate(config.nextDueDate);
+  if (dueIso > toIsoDate(dayStart())) {
+    // Not due yet. The corrected date is still worth storing, so the mark
+    // stops pointing at a day the series will never use.
+    if (dueIso !== config.nextDueDate) {
+      await advanceMark(parent.id, config, dueIso);
+    }
+
+    return null;
+  }
+
+  const dueDate = toUtcDate(dueIso);
   const created = await writeInstance(parent, dueDate);
 
   // Advance whether or not a row was written, so a clash cannot wedge the
@@ -202,16 +217,34 @@ export async function generateDueInstances(options?: {
 
   for (const parent of parents) {
     const config = parseRecurringConfig(parent.recurringConfig);
-    if (!config || config.nextDueDate > today) continue;
+    if (!config) continue;
+
+    /**
+     * The mark is corrected before it is read, so a daily series whose mark
+     * is on a Saturday cannot produce a Saturday task — whichever day the
+     * sweep happens to run on.
+     */
+    const startIso = dueDateFor(config, config.nextDueDate);
+
+    if (startIso > today) {
+      // Nothing due. If correcting the mark moved it, store that much: the
+      // sweep runs on every list load, so a weekend mark would otherwise sit
+      // there until Monday and be read again each time.
+      if (startIso !== config.nextDueDate) {
+        await advanceMark(parent.id, config, startIso);
+      }
+
+      continue;
+    }
 
     // Walk the schedule in memory first: one pass, no reload between dates.
     const due: string[] = [];
-    let cursor: string | null = config.nextDueDate;
+    let cursor: string | null = startIso;
 
     while (cursor && cursor <= today && due.length < 400) {
       due.push(cursor);
       const following = nextOccurrence(config, toUtcDate(cursor));
-      cursor = following ? toIsoDate(following) : null;
+      cursor = following ? dueDateFor(config, toIsoDate(following)) : null;
     }
 
     if (due.length === 0) continue;

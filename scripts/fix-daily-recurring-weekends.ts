@@ -113,8 +113,12 @@ async function main() {
       }
     }
 
-    // The high-water mark decides what gets generated next, so a weekend one
-    // would recreate the problem on the next sweep.
+    /**
+     * The mark is the half that matters going forward: it decides what the
+     * next sweep generates, so a weekend one would recreate the problem the
+     * moment somebody loads a page. The generators correct it in passing too,
+     * but a series nobody opens would keep it until they did.
+     */
     const parsed = parseRecurringConfig(parent.recurringConfig);
 
     if (parsed && isWeekend(toUtcDate(parsed.nextDueDate))) {
