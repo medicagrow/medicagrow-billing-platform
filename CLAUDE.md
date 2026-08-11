@@ -388,6 +388,64 @@ npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
   (`arSummary`, `billerProgress`) and are shared by the homepage, the AR
   dashboard page and `/api/ar/dashboard` so the three cannot disagree.
 
+### The 0–30 day rule
+
+A claim aged **30 days or less is "not yet actionable"** — insurance has not
+had time to process it, so calling about one is a wasted call. The flag is
+**derived, never stored**: `isNotActionable()` / `ACTIONABLE_WHERE` /
+`NOT_ACTIONABLE_WHERE` in [lib/ar-actionable.ts](lib/ar-actionable.ts), free of
+Prisma so client components can import it.
+
+These claims stay **fully visible** — a PM needs the whole book. What they are
+out of is *work*:
+
+- **My Queue** excludes them; `includeNotActionable=true` and a "Show 0–30 day
+  claims" toggle bring them back for a biller with a clear queue.
+- **Bulk assign** skips them and reports how many it skipped, unless
+  `includeNotActionable` is set. Enforced in the route, not by filtering the
+  selection in the browser — the list deliberately still shows them.
+  Unassigning is exempt: taking work back is never premature.
+- **Every completion percentage** is over actionable claims alone, numerator
+  and denominator both. `batchStats` keeps `greenCount`/`redCount`/`blueCount`
+  over the **whole** batch — the close dialog must still see fresh unworked
+  claims — and narrows only `percent*`, returning `notActionableCount` and
+  `actionableClaims` so the page can say what it left out.
+- `arSummary` and `billerProgress` are narrowed the same way, so the dashboard
+  cards, the homepage and `/api/ar/dashboard` agree. The cards read from
+  `arSummary` rather than re-summing the practice rows, which would disagree.
+- **The aging badge is grey under 30 days, not green** — green reads as
+  "healthy, nothing to do", and the truth is "nothing to do *yet*". The batch
+  list spells it out with `<AgingBadge withLabel />`.
+- The **insurance aging table still shows the 0–30 bucket in full**: it answers
+  "what is outstanding", not "what can we act on". Both it and the summary
+  cards carry a footnote saying which they are.
+
+### Reassigned to Me
+
+A claim reaches a manager's own name two ways, and
+[lib/ar-reassignment.ts](lib/ar-reassignment.ts) treats both as one queue:
+
+- a **blue status**, which `resolveEscalationTarget()` moves on save — the
+  status is the only record, so the status *is* the signal; and
+- a **manual hand-over** from the note form's "Reassign to Practice PM", which
+  writes `assignedToChangedId` on the note.
+
+The second cannot be read from the claim: `assignedToId` says who holds it now,
+not how it got there. So `manuallyReassignedTo()` reads the note history and
+takes the **most recent** note that changed the assignee — an earlier one that
+has since been superseded does not count, and a manager who assigned themselves
+a claim has not been handed anything. `DISTINCT ON` in raw SQL, so it is one
+round trip for the whole batch rather than one per claim.
+
+- Surfaces as a **"Reassigned to Me" tab** on the batch detail page and an
+  amber count on the summary bar (Owner/PM only), and as a banner plus tab on
+  My Queue for a manager who also works claims.
+- `GET /api/ar/claims?reassignedToMe=true` returns the same set with the
+  hand-over context attached — who passed it over, when, and their note — so
+  the tab does not need a request per row.
+- "Reassign" on a row seeds the assign dropdown with **whoever handed it over**,
+  since answering their question and sending it back is the common case.
+
 ### Batch claim list
 
 - **Assignee dropdowns offer the practice's own people, plus Owners** —
@@ -396,12 +454,17 @@ npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
   `UserPractice` rows but reach everything, so they are added explicitly;
   offering the whole staff list let a batch be handed to somebody who cannot
   open it.
-- Five filters AND together: insurance, aging, provider, date-of-service range
-  and a patient/CPT search. **Each filter that needs an OR of its own goes into
-  an `AND: []` array** rather than a top-level `OR` key, which the object
-  spread would silently overwrite. The provider filter matches
-  `renderingProvider` **or** `providerName`, because the column shows
-  whichever the claim has.
+- Filters AND together: insurance, aging, provider, **assigned-to**,
+  actionability, date-of-service range and a patient/CPT/visit-id search.
+  **Each filter that needs an OR of its own goes into an `AND: []` array**
+  rather than a top-level `OR` key, which the object spread would silently
+  overwrite. The provider filter matches `renderingProvider` **or**
+  `providerName`, because the column shows whichever the claim has.
+- **"Assigned To" is a multi-select over the practice's own people, plus
+  "Unassigned"** — which travels as its own `includeUnassigned` flag rather
+  than a sentinel id in `assignedToIds`, because the API has no user by that
+  name and a magic string in a list of ids is the kind of thing that later
+  gets looked up. The two combine as an OR.
 - The search box debounces 300 ms — a request per keystroke lets a slow early
   response land after a fast later one.
 - The claim list's free-text box spans **three** fields — patient name, CPT
@@ -417,9 +480,27 @@ npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
 ### Claim visibility rules
 
 - The biller queue (`/api/ar/claims/my-queue`) enforces four conditions in one
-  database query — assigned to caller, RED, batch OPEN, and the batch's
-  practice in the caller's `UserPractice` rows. Never filter these in JS after
-  the query or the pagination counts drift from the rows.
+  database query — assigned to caller, the view's status, batch OPEN, and the
+  batch's practice in the caller's `UserPractice` rows. Never filter these in
+  JS after the query or the pagination counts drift from the rows.
+- **Three views over that one scope**, chosen by `view`: `active` (RED, the
+  default), `completed` (GREEN, newest `lastWorkedAt` first — a biller's record
+  of their own work) and `reassigned` (Owner/PM). Adding a view must not widen
+  the scope, which is why the scope is built once and the view only adds a
+  status. The tab counts come back on every response and honour the same
+  filters, so switching tabs lands on what the badge promised.
+  - The **date range means different things per view** — an active claim is
+    filtered on when it is next due, a completed one on when it was finished.
+  - Completed claims are still restricted to **open** batches: a closed batch is
+    read-only history and appears nowhere in the queue.
+  - Re-opening works for free — logging a red-status note on a green claim
+    moves it back to the active view, since the view is the status.
+- Its filters match the batch list: practice, insurance (multi-select), status,
+  visit status (hidden when nothing in the caller's book has one), free-text
+  search over patient/CPT/visit id, a date range, and the 0–30 day toggle.
+  Option lists are built from the caller's **whole** book rather than the
+  current view — a dropdown whose options change as you filter is one you
+  cannot use to undo a filter.
 - Owners skip the practice condition: they hold implicit access to everything
   and have no `UserPractice` rows, so the join would empty their queue.
 - `/api/ar/claims` narrows **billers** to their own claims; PMs and Owners see
@@ -618,6 +699,7 @@ reports read time the same way.
 ```bash
 npx tsx scripts/test-time-logs.ts   # efficiency rate, overrun detection, breakdowns
 npx tsx scripts/test-escalation.ts  # blue-status fallback chain
+npx tsx scripts/test-actionable.ts  # the 0–30 day rule, and hand-over detection
 ```
 
 ### Import format — standard CSV only

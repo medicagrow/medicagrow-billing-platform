@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/Card";
 import { accessiblePracticeIds, canManageBatches } from "@/lib/ar-access";
 import { InsuranceAgingTable } from "@/components/ar/InsuranceAgingTable";
 import { ProgressBar, progressTextClass } from "@/components/ui/ProgressBar";
+import { NOT_ACTIONABLE_MAX_DAYS } from "@/lib/ar-actionable";
 import { arBillerActivity, arSummary, billerProgress } from "@/lib/ar-summary";
 import { toDateParam } from "@/lib/productivity/date-ranges";
 import { insuranceAgingBreakdown } from "@/lib/ar-insurance-aging";
@@ -240,15 +241,10 @@ export default async function ArDashboardPage({
   // claims in, not every practice with an open batch.
   .filter((row) => !isBiller || (row.batch?.totalClaims ?? 0) > 0);
 
-  const totals = rows.reduce(
-    (running, row) => ({
-      balance: running.balance + Number(row.batch?.totalBalance ?? 0),
-      red: running.red + row.redCount,
-      overdue: running.overdue + row.overdueCount,
-      noBatch: running.noBatch + (row.batch ? 0 : 1),
-    }),
-    { balance: 0, red: 0, overdue: 0, noBatch: 0 },
-  );
+  // Balance, red and overdue now come from `arSummary` — see the cards below.
+  // What is left is the one figure it does not answer: practices with no open
+  // batch at all, which is a fact about practices, not claims.
+  const noBatchCount = rows.filter((row) => !row.batch).length;
 
   const startOfMonth = new Date(
     Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1),
@@ -278,29 +274,50 @@ export default async function ArDashboardPage({
       />
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/*
+          These three read from `arSummary`, not the per-practice rows below.
+          Both would answer the same question, but only one of them excludes
+          the 0–30 day bucket, and two figures on one screen disagreeing about
+          what "outstanding" means is worse than either answer alone.
+        */}
         <SummaryCard
           label={isBiller ? "My outstanding balance" : "Total outstanding"}
-          value={formatUSD(totals.balance.toFixed(2))}
+          value={formatUSD(summary.totalBalance)}
         />
         <SummaryCard
           label={isBiller ? "My red claims" : "Red claims"}
-          value={String(totals.red)}
+          value={String(summary.totalRedClaims)}
         />
         <SummaryCard
           label={isBiller ? "My overdue follow-ups" : "Overdue follow-ups"}
-          value={String(totals.overdue)}
-          tone={totals.overdue > 0 ? "red" : undefined}
+          value={String(summary.overdueCount)}
+          tone={summary.overdueCount > 0 ? "red" : undefined}
         />
         {isBiller ? (
           <SummaryCard label="My claims" value={String(summary.totalClaims)} />
         ) : (
           <SummaryCard
             label="No active batch"
-            value={String(totals.noBatch)}
-            tone={totals.noBatch > 0 ? "amber" : undefined}
+            value={String(noBatchCount)}
+            tone={noBatchCount > 0 ? "amber" : undefined}
           />
         )}
       </div>
+
+      {/*
+        The cards above count workable claims only. The insurance aging table
+        further down still shows the 0–30 bucket in full — the question there
+        is "what is outstanding", which is a different question from "what can
+        we do something about".
+      */}
+      {summary.notActionableClaims > 0 ? (
+        <p className="-mt-3 mb-6 text-xs text-slate-500">
+          Summary excludes {summary.notActionableClaims} claim
+          {summary.notActionableClaims === 1 ? "" : "s"} in the 0–
+          {NOT_ACTIONABLE_MAX_DAYS} day bucket, worth{" "}
+          {formatUSD(summary.notActionableBalance)} — not yet actionable.
+        </p>
+      ) : null}
 
       <div className="mb-6 rounded-xl border border-slate-200 bg-white p-5 shadow-card">
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">

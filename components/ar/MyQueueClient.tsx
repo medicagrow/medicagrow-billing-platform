@@ -12,34 +12,52 @@ import {
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
+import { MultiSelectDropdown } from "@/components/ui/MultiSelectDropdown";
 import { Select } from "@/components/ui/Select";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import type { ClaimDto } from "@/lib/ar-serialize";
 import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
-import { RED_STATUSES } from "@/lib/ar-status";
+import { NOT_ACTIONABLE_MAX_DAYS } from "@/lib/ar-actionable";
+import { GREEN_STATUSES, RED_STATUSES } from "@/lib/ar-status";
 import { usePractice } from "@/lib/contexts/PracticeContext";
 import { formatDate, formatUSD } from "@/lib/format";
+import { formatDateIST } from "@/lib/timezone";
 
 /** The first of the shared page sizes — 50 rows. */
 const DEFAULT_PAGE_SIZE = PAGE_SIZE_OPTIONS[0]!;
+
+interface Reassignment {
+  reassignedByName: string;
+  reassignedById: string;
+  reassignedAt: string;
+  note: string;
+}
 
 type QueueClaim = ClaimDto & {
   practiceId: string;
   practiceName: string;
   reportMonth: number;
   reportYear: number;
+  reassignment: Reassignment | null;
 };
 
 type SortKey = "agingDays" | "balance" | "followUpDate" | "patientName";
 
+type ViewKey = "active" | "completed" | "reassigned";
+
 /** What every filter reads as when nothing is chosen. */
 const FILTER_DEFAULTS = {
+  view: "active",
   practiceId: "",
-  insuranceName: "",
+  insurance: [] as string[],
   statusLabel: "",
+  visitStatus: "",
+  search: "",
   followUpFrom: "",
   followUpTo: "",
+  /** Off by default: a claim under 30 days old is not work yet. */
+  includeNotActionable: false,
   sort: "agingDays",
   dir: "desc",
   page: 1,
@@ -48,8 +66,20 @@ const FILTER_DEFAULTS = {
 
 export function MyQueueClient({
   practices,
+  insuranceOptions,
+  visitStatusOptions,
+  isManager,
 }: {
   practices: { id: string; name: string }[];
+  /** Distinct values across everything assigned to this person. */
+  insuranceOptions: string[];
+  /**
+   * Empty when no claim in their book carries a visit status — the filter is
+   * then not rendered at all, rather than promising data that is not there.
+   */
+  visitStatusOptions: string[];
+  /** Only a manager has people who can hand work back to them. */
+  isManager: boolean;
 }) {
   // The top-bar selector is the global filter; the local dropdown narrows
   // further within it.
@@ -59,6 +89,12 @@ export function MyQueueClient({
     totalClaims: 0,
     totalBalance: "0.00",
     overdueCount: 0,
+    completedThisMonth: 0,
+  });
+  const [counts, setCounts] = useState({
+    active: 0,
+    completed: 0,
+    reassigned: 0,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,22 +103,28 @@ export function MyQueueClient({
   // The queue is a working list, so its filters live in the URL — coming back
   // from a claim should return to the same queue, not a reset one.
   const [filters, setFilters, clearFilters] = useFilterState(FILTER_DEFAULTS, {
-    debounced: ["insuranceName"],
+    debounced: ["search"],
     pageKey: "page",
   });
 
   const {
     practiceId,
-    insuranceName,
     statusLabel,
+    visitStatus,
+    search,
     followUpFrom,
     followUpTo,
+    includeNotActionable,
     page,
   } = filters;
 
+  const view = filters.view as ViewKey;
   const pageSize = filters.limit;
 
+  // The view, the sort and the page are how you move through the queue rather
+  // than narrow it, so they do not light up "clear all filters".
   const filtersActive = hasActiveFilters(filters, FILTER_DEFAULTS, [
+    "view",
     "sort",
     "dir",
     "page",
@@ -114,6 +156,7 @@ export function MyQueueClient({
 
   const query = useMemo(() => {
     const params = new URLSearchParams({
+      view,
       page: String(page),
       pageSize: String(pageSize),
     });
@@ -121,20 +164,30 @@ export function MyQueueClient({
     const effectivePracticeId = practiceId || selectedPracticeId;
 
     if (effectivePracticeId) params.set("practiceId", effectivePracticeId);
-    if (insuranceName) params.set("insuranceName", insuranceName);
+    if (filters.insurance.length > 0) {
+      params.set("insuranceNames", filters.insurance.join(","));
+    }
     if (statusLabel) params.set("statusLabel", statusLabel);
+    if (visitStatus) params.set("visitStatus", visitStatus);
+    if (search.trim()) params.set("search", search.trim());
     if (followUpFrom) params.set("followUpFrom", followUpFrom);
     if (followUpTo) params.set("followUpTo", followUpTo);
+    if (includeNotActionable) params.set("includeNotActionable", "true");
+
     return params.toString();
   }, [
+    view,
     page,
     pageSize,
     practiceId,
     selectedPracticeId,
-    insuranceName,
+    filters.insurance,
     statusLabel,
+    visitStatus,
+    search,
     followUpFrom,
     followUpTo,
+    includeNotActionable,
   ]);
 
   const load = useCallback(async () => {
@@ -152,6 +205,7 @@ export function MyQueueClient({
 
       setClaims(payload.data);
       setSummary(payload.summary);
+      setCounts(payload.counts);
       setTotalPages(payload.pagination.totalPages);
     } catch {
       setError("Could not load your queue. Check your connection.");
@@ -209,12 +263,27 @@ export function MyQueueClient({
 
   const today = new Date();
 
+  const TABS: { key: ViewKey; label: string; count: number; tone?: string }[] = [
+    { key: "active", label: "Active", count: counts.active },
+    { key: "completed", label: "Completed", count: counts.completed },
+    ...(isManager
+      ? [
+          {
+            key: "reassigned" as ViewKey,
+            label: "Reassigned to me",
+            count: counts.reassigned,
+            tone: "amber",
+          },
+        ]
+      : []),
+  ];
+
   return (
     <div>
-      <div className="mb-5 grid gap-4 sm:grid-cols-3">
+      <div className="mb-5 grid gap-4 sm:grid-cols-4">
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
           <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-            Claims in queue
+            {view === "completed" ? "Completed claims" : "Claims in queue"}
           </p>
           <p className="mt-1 text-2xl font-semibold tabular-nums text-slate-900">
             {summary.totalClaims}
@@ -246,6 +315,65 @@ export function MyQueueClient({
             {summary.overdueCount}
           </p>
         </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            Completed this month
+          </p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums text-emerald-700">
+            {summary.completedThisMonth}
+          </p>
+        </div>
+      </div>
+
+      {/*
+        A manager who also works claims sees what has been handed back to them
+        before anything else — it is somebody waiting on an answer, which is
+        more urgent than their own queue.
+      */}
+      {isManager && counts.reassigned > 0 && view !== "reassigned" ? (
+        <button
+          type="button"
+          onClick={() => setFilters({ view: "reassigned" })}
+          className="mb-4 flex w-full items-center justify-between rounded-lg bg-amber-50 px-4 py-2.5 text-left text-sm text-amber-800 ring-1 ring-inset ring-amber-200 hover:bg-amber-100"
+        >
+          <span>
+            <span className="font-semibold">
+              Claims reassigned to you — {counts.reassigned} pending
+            </span>
+            <span className="ml-2 text-xs text-amber-700">
+              blue-status escalations and claims a biller handed back
+            </span>
+          </span>
+          <span className="text-xs font-medium underline">View</span>
+        </button>
+      ) : null}
+
+      <div className="mb-4 flex flex-wrap items-center gap-1 border-b border-slate-200">
+        {TABS.map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            onClick={() => setFilters({ view: entry.key })}
+            className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              view === entry.key
+                ? "border-brand-600 text-brand-700"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            {entry.label}
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
+                entry.count === 0
+                  ? "bg-slate-100 text-slate-500"
+                  : entry.tone === "amber"
+                    ? "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-200"
+                    : "bg-slate-100 text-slate-700"
+              }`}
+            >
+              {entry.count}
+            </span>
+          </button>
+        ))}
       </div>
 
       <div className="mb-3 flex flex-wrap items-end gap-2">
@@ -255,6 +383,7 @@ export function MyQueueClient({
             setFilters({ practiceId: event.target.value });
           }}
           className="w-auto min-w-[170px]"
+          aria-label="Practice"
         >
           <option value="">All practices</option>
           {practices.map((practice) => (
@@ -264,51 +393,115 @@ export function MyQueueClient({
           ))}
         </Select>
 
-        <Input
-          value={insuranceName}
-          onChange={(event) => {
-            setFilters({ insuranceName: event.target.value });
-          }}
-          placeholder="Filter by insurance"
-          className="w-auto min-w-[170px]"
+        <MultiSelectDropdown
+          options={insuranceOptions.map((name) => ({
+            label: name,
+            value: name,
+          }))}
+          selected={filters.insurance}
+          onChange={(next) => setFilters({ insurance: next })}
+          placeholder="All insurances"
+          allLabel="All Insurances"
+          noun="insurances"
+          aria-label="Insurance"
+          className="w-auto min-w-[190px]"
         />
 
+        {/* The status list follows the tab: a completed claim is never red. */}
         <Select
           value={statusLabel}
           onChange={(event) => {
             setFilters({ statusLabel: event.target.value });
           }}
           className="w-auto min-w-[160px]"
+          aria-label="Status"
         >
-          <option value="">All red statuses</option>
-          {RED_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status}
-            </option>
-          ))}
+          <option value="">
+            {view === "completed" ? "All green statuses" : "All statuses"}
+          </option>
+          {(view === "completed" ? GREEN_STATUSES : RED_STATUSES).map(
+            (status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ),
+          )}
         </Select>
 
+        {/*
+          Only rendered when something in this person's book actually carries a
+          visit status — an empty dropdown promises data that is not there.
+        */}
+        {visitStatusOptions.length > 0 ? (
+          <Select
+            value={visitStatus}
+            onChange={(event) => setFilters({ visitStatus: event.target.value })}
+            className="w-auto min-w-[160px]"
+            aria-label="Visit status"
+          >
+            <option value="">All visit statuses</option>
+            {visitStatusOptions.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </Select>
+        ) : null}
+
+        <Input
+          type="search"
+          value={search}
+          onChange={(event) => setFilters({ search: event.target.value })}
+          placeholder="Search patient name, CPT or Visit ID..."
+          aria-label="Search patient name, CPT or Visit ID"
+          className="w-auto min-w-[220px]"
+        />
+
         <div className="flex items-center gap-1">
+          <span className="text-xs text-slate-500">
+            {view === "completed" ? "Completed" : "Follow-up"}
+          </span>
           <Input
             type="date"
             value={followUpFrom}
+            max={followUpTo || undefined}
             onChange={(event) => {
               setFilters({ followUpFrom: event.target.value });
             }}
             className="w-auto"
-            aria-label="Follow-up from"
+            aria-label={
+              view === "completed" ? "Completed from" : "Follow-up from"
+            }
           />
           <span className="text-xs text-slate-400">to</span>
           <Input
             type="date"
             value={followUpTo}
+            min={followUpFrom || undefined}
             onChange={(event) => {
               setFilters({ followUpTo: event.target.value });
             }}
             className="w-auto"
-            aria-label="Follow-up to"
+            aria-label={view === "completed" ? "Completed to" : "Follow-up to"}
           />
         </div>
+
+        {/*
+          0–30 day claims are out of the queue because insurance has not had
+          time to process them. The toggle is for a biller with a clear queue
+          who wants to look ahead.
+        */}
+        <label className="flex items-center gap-1.5 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            checked={includeNotActionable}
+            onChange={(event) =>
+              setFilters({ includeNotActionable: event.target.checked })
+            }
+            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-600"
+          />
+          Show 0–{NOT_ACTIONABLE_MAX_DAYS} day claims
+        </label>
 
         {filtersActive ? (
           <Button
@@ -332,13 +525,25 @@ export function MyQueueClient({
         </div>
       ) : sorted.length === 0 ? (
         <EmptyState
-          title="Your queue is empty — no pending claims assigned to you"
-          description="Claims appear here when a project manager assigns you red-status work."
+          title={
+            view === "completed"
+              ? "Nothing completed yet in this period"
+              : view === "reassigned"
+                ? "Nothing has been handed to you"
+                : "Your queue is empty — no pending claims assigned to you"
+          }
+          description={
+            view === "completed"
+              ? "Claims appear here once you move them to a green status."
+              : view === "reassigned"
+                ? "Blue-status escalations and claims a biller reassigns to you land here."
+                : "Claims appear here when a project manager assigns you red-status work."
+          }
         />
       ) : (
         <>
           <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-card">
-            <table className="w-full min-w-[960px] text-sm">
+            <table className="w-full min-w-[1040px] text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-3">
@@ -355,7 +560,11 @@ export function MyQueueClient({
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Practice</th>
                   <th className="px-4 py-3">
-                    <SortHeader label="Follow-up" sortAs="followUpDate" />
+                    {view === "completed" ? (
+                      "Completed"
+                    ) : (
+                      <SortHeader label="Follow-up" sortAs="followUpDate" />
+                    )}
                   </th>
                 </tr>
               </thead>
@@ -374,6 +583,26 @@ export function MyQueueClient({
                         >
                           {claim.patientName}
                         </Link>
+                        {/*
+                          How this claim reached the manager, and the note the
+                          biller left with it — the context that saves opening
+                          the claim to find out why it came back.
+                        */}
+                        {claim.reassignment ? (
+                          <span className="mt-0.5 block text-xs text-amber-700">
+                            ↩ Reassigned by {claim.reassignment.reassignedByName}
+                            <span className="block text-slate-500">
+                              {claim.reassignment.note.length > 90
+                                ? `${claim.reassignment.note.slice(0, 90)}…`
+                                : claim.reassignment.note}
+                            </span>
+                          </span>
+                        ) : view === "reassigned" &&
+                          claim.statusCategory === "BLUE" ? (
+                          <span className="mt-0.5 block text-xs text-sky-700">
+                            Escalated by blue status
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-slate-600">
                         {claim.insuranceName}
@@ -397,7 +626,15 @@ export function MyQueueClient({
                         {claim.practiceName}
                       </td>
                       <td className="px-4 py-3">
-                        {claim.followUpDate ? (
+                        {view === "completed" ? (
+                          <span className="text-slate-600">
+                            {/*
+                              A completion is a moment, not a calendar date, so
+                              it reads in IST like every other timestamp.
+                            */}
+                            {formatDateIST(claim.lastWorkedAt)}
+                          </span>
+                        ) : claim.followUpDate ? (
                           <span
                             className={
                               overdue
@@ -429,9 +666,7 @@ export function MyQueueClient({
               setFilters({ limit: size, page: 1 });
             }}
             noun="claims"
-            filtered={Boolean(
-              practiceId || insuranceName || statusLabel || followUpFrom || followUpTo,
-            )}
+            filtered={filtersActive}
           />
         </>
       )}

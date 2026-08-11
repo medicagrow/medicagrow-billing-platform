@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { BatchStatus, Role } from "@/lib/generated/prisma/enums";
 import { apiErrorResponse, requireRole, zodErrorResponse } from "@/lib/api-helpers";
 import { accessiblePracticeIds } from "@/lib/ar-access";
+import { isNotActionable, NOT_ACTIONABLE_MAX_DAYS } from "@/lib/ar-actionable";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { bulkAssignSchema } from "@/lib/validations/ar";
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
     return zodErrorResponse(body.error);
   }
 
-  const { claimIds, assignedToId } = body.data;
+  const { claimIds, assignedToId, includeNotActionable } = body.data;
 
   if (claimIds.length > MAX_BULK_CLAIMS) {
     return apiErrorResponse(
@@ -45,6 +46,7 @@ export async function POST(request: NextRequest) {
     select: {
       id: true,
       batchId: true,
+      agingDays: true,
       batch: { select: { status: true, practiceId: true } },
     },
   });
@@ -80,10 +82,33 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  /**
+   * 0–30 day claims are dropped from the assignment unless the PM asked for
+   * them. They stay selectable in the list — hiding them would make the batch
+   * unreadable — so the rule lives here, and the response says how many it
+   * skipped rather than silently doing less than was asked.
+   *
+   * Unassigning is exempt: taking work *back* off a biller is never premature.
+   */
+  const skipped =
+    includeNotActionable || assignedToId === null
+      ? []
+      : claims.filter((claim) => isNotActionable(claim));
+
+  const skippedIds = new Set(skipped.map((claim) => claim.id));
+  const assignable = claims.filter((claim) => !skippedIds.has(claim.id));
+
+  if (assignable.length === 0) {
+    return apiErrorResponse(
+      `Every selected claim is in the 0–${NOT_ACTIONABLE_MAX_DAYS} day bucket and not yet actionable. Tick "Include 0–${NOT_ACTIONABLE_MAX_DAYS} day claims" to assign them anyway.`,
+      400,
+    );
+  }
+
   const result = await prisma.arClaim.updateMany({
-    where: { id: { in: claims.map((claim) => claim.id) } },
+    where: { id: { in: assignable.map((claim) => claim.id) } },
     data: { assignedToId },
   });
 
-  return NextResponse.json({ updated: result.count });
+  return NextResponse.json({ updated: result.count, skipped: skipped.length });
 }

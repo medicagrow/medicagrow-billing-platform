@@ -15,6 +15,8 @@ import {
   canManageBatches,
   practiceAssignees,
 } from "@/lib/ar-access";
+import { excludedNote } from "@/lib/ar-actionable";
+import { countReassignedToMe } from "@/lib/ar-reassignment";
 import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
 import { batchStats, daysBetween } from "@/lib/ar-stats";
 import { formatDate, formatUSD } from "@/lib/format";
@@ -66,18 +68,20 @@ export default async function BatchDetailPage({
 }: {
   params: { batchId: string };
   /** A count on a dashboard links in here already filtered. */
-  searchParams: { statusCategory?: string; overdue?: string };
+  searchParams: { statusCategory?: string; overdue?: string; tab?: string };
 }) {
   const user = await requireUser();
 
   const initialTab: TabKey =
-    searchParams.overdue === "true"
-      ? "overdue"
-      : searchParams.statusCategory === "RED"
-        ? "red"
-        : searchParams.statusCategory === "BLUE"
-          ? "blue"
-          : "all";
+    searchParams.tab === "reassigned"
+      ? "reassigned"
+      : searchParams.overdue === "true"
+        ? "overdue"
+        : searchParams.statusCategory === "RED"
+          ? "red"
+          : searchParams.statusCategory === "BLUE"
+            ? "blue"
+            : "all";
 
   if (!(await canAccessBatch(user, params.batchId))) {
     notFound();
@@ -94,9 +98,16 @@ export default async function BatchDetailPage({
 
   if (!batch) notFound();
 
-  const stats = await batchStats(batch.id);
   const isManager = canManageBatches(user);
   const closed = batch.status === BatchStatus.CLOSED;
+
+  const [stats, reassignedToMeCount] = await Promise.all([
+    batchStats(batch.id),
+    // Only a manager has people who can hand work back to them.
+    isManager
+      ? countReassignedToMe(user.id, batch.id)
+      : Promise.resolve(0),
+  ]);
 
   // Only people who can actually open this batch are offered as assignees.
   const [assignees, insurances, providerRows, visitStatuses] =
@@ -208,6 +219,18 @@ export default async function BatchDetailPage({
             value={String(stats.overdueCount)}
             tone={stats.overdueCount > 0 ? "red" : undefined}
           />
+          {isManager ? (
+            <a
+              href="?tab=reassigned#reassigned-to-me"
+              className="block rounded transition-colors hover:bg-amber-50"
+            >
+              <Stat
+                label="Reassigned to me"
+                value={String(reassignedToMeCount)}
+                tone={reassignedToMeCount > 0 ? "amber" : undefined}
+              />
+            </a>
+          ) : null}
           <div>
             <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
               Target date
@@ -226,6 +249,17 @@ export default async function BatchDetailPage({
             red={stats.percentRed}
             blue={stats.percentBlue}
           />
+          {/*
+            The completion rate is over claims the team was actually allowed to
+            work. Saying so matters: without the note the percentage looks
+            wrong to anyone who divides the green count by the total.
+          */}
+          {stats.notActionableCount > 0 ? (
+            <p className="mt-2 text-xs text-slate-500">
+              {excludedNote(stats.notActionableCount)} — {stats.actionableClaims}{" "}
+              of {stats.totalClaims} claims counted.
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -238,6 +272,8 @@ export default async function BatchDetailPage({
         providerOptions={providerOptions}
         visitStatusOptions={visitStatusOptions}
         initialTab={initialTab}
+        showReassignedTab={isManager}
+        reassignedCount={reassignedToMeCount}
       />
     </div>
   );

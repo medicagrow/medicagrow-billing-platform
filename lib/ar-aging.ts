@@ -1,3 +1,5 @@
+import { NOT_ACTIONABLE_MAX_DAYS } from "@/lib/ar-actionable";
+
 export const AGING_BUCKETS = [
   { key: "0-30", label: "0–30 days", min: 0, max: 30 },
   { key: "31-60", label: "31–60 days", min: 31, max: 60 },
@@ -28,9 +30,19 @@ export function agingBucketFilter(key: string) {
     : { gte: bucket.min, lte: bucket.max };
 }
 
-/** Tailwind classes for the aging badge — green <30 through red >90. */
+/**
+ * Tailwind classes for the aging badge — grey under 30 days, then amber
+ * through red.
+ *
+ * The 0–30 bucket is deliberately **not** green. Green reads as "healthy, no
+ * action needed", and what a fresh claim actually means is "there is nothing
+ * to do here yet" — a different statement, and the one the queue and the
+ * completion rate act on. See lib/ar-actionable.ts.
+ */
 export function agingBadgeClasses(agingDays: number): string {
-  if (agingDays <= 30) return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (agingDays <= NOT_ACTIONABLE_MAX_DAYS) {
+    return "bg-slate-100 text-slate-600 ring-slate-200";
+  }
   if (agingDays <= 60) return "bg-amber-50 text-amber-700 ring-amber-200";
   if (agingDays <= 90) return "bg-orange-50 text-orange-700 ring-orange-200";
   return "bg-red-50 text-red-700 ring-red-200";

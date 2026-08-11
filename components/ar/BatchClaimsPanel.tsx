@@ -19,13 +19,20 @@ import { Select } from "@/components/ui/Select";
 import { SettingsIcon } from "@/components/ui/icons";
 import { TableSkeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/toast";
+import { NOT_ACTIONABLE_MAX_DAYS } from "@/lib/ar-actionable";
 import { AGING_BUCKETS } from "@/lib/ar-aging";
 import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { isBoolean, useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import type { ClaimDto } from "@/lib/ar-serialize";
 import { formatDate, formatUSD } from "@/lib/format";
 
-export type TabKey = "all" | "unassigned" | "red" | "blue" | "overdue";
+export type TabKey =
+  | "all"
+  | "unassigned"
+  | "red"
+  | "blue"
+  | "overdue"
+  | "reassigned";
 
 type SortKey = "aging" | "patientName" | "provider" | "balance" | "status";
 
@@ -40,11 +47,24 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "overdue", label: "Overdue Follow-ups" },
 ];
 
+/** "Nobody" is a choice in the Assigned To list, but it is not a user. */
+const UNASSIGNED = "__unassigned__";
+
 interface Assignee {
   id: string;
   name: string;
   role: string;
 }
+
+/** Who handed a claim over, and what they said — only on the reassigned tab. */
+interface Reassignment {
+  reassignedByName: string;
+  reassignedById: string;
+  reassignedAt: string;
+  note: string;
+}
+
+type PanelClaim = ClaimDto & { reassignment?: Reassignment | null };
 
 /**
  * What every filter reads as when nothing is chosen. Declared once: the hook
@@ -56,6 +76,9 @@ const FILTER_DEFAULTS = {
   insurance: [] as string[],
   aging: [] as string[],
   provider: [] as string[],
+  assignedTo: [] as string[],
+  /** "" all · "only" 31+ days · "not-actionable" the 0–30 day bucket alone. */
+  actionable: "",
   visitStatus: "",
   dosFrom: "",
   dosTo: "",
@@ -75,6 +98,8 @@ export function BatchClaimsPanel({
   providerOptions,
   visitStatusOptions,
   initialTab = "all",
+  showReassignedTab = false,
+  reassignedCount = 0,
 }: {
   batchId: string;
   canAssign: boolean;
@@ -91,6 +116,13 @@ export function BatchClaimsPanel({
   visitStatusOptions: string[];
   /** Seeded from the URL, so a dashboard count lands on what it counted. */
   initialTab?: TabKey;
+  /**
+   * Claims a biller has handed back to this manager. Only managers have a
+   * queue of their own to be handed to, so a biller gets no tab at all rather
+   * than an empty one.
+   */
+  showReassignedTab?: boolean;
+  reassignedCount?: number;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -112,13 +144,18 @@ export function BatchClaimsPanel({
   const page = filters.page;
   const pageSize = filters.limit;
 
-  const [claims, setClaims] = useState<ClaimDto[]>([]);
+  const [claims, setClaims] = useState<PanelClaim[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [assignTo, setAssignTo] = useState("");
   const [assigning, setAssigning] = useState(false);
+  /**
+   * Off by default: a claim insurance has not had time to process is not work
+   * to hand out. Ticking it is the PM saying they mean it.
+   */
+  const [assignNotActionable, setAssignNotActionable] = useState(false);
   /**
    * Optional columns, off by default. Most batches carry neither field, and a
    * column of dashes costs width the columns people actually read need.
@@ -170,6 +207,7 @@ export function BatchClaimsPanel({
     if (tab === "red") params.set("statusCategory", "RED");
     if (tab === "blue") params.set("statusCategory", "BLUE");
     if (tab === "overdue") params.set("overdue", "true");
+    if (tab === "reassigned") params.set("reassignedToMe", "true");
     // Empty means "no filter", so the params are omitted entirely.
     if (filters.insurance.length > 0) {
       params.set("insuranceNames", filters.insurance.join(","));
@@ -180,6 +218,20 @@ export function BatchClaimsPanel({
     if (filters.provider.length > 0) {
       params.set("providerNames", filters.provider.join(","));
     }
+
+    /**
+     * "Unassigned" travels as its own flag rather than a sentinel id: the API
+     * has no user by that name, and a magic string in a list of ids is the
+     * kind of thing that later gets looked up.
+     */
+    const people = filters.assignedTo.filter((id) => id !== UNASSIGNED);
+
+    if (filters.assignedTo.includes(UNASSIGNED)) {
+      params.set("includeUnassigned", "true");
+    }
+    if (people.length > 0) params.set("assignedToIds", people.join(","));
+
+    if (filters.actionable) params.set("actionable", filters.actionable);
     if (filters.visitStatus) params.set("visitStatus", filters.visitStatus);
     if (filters.dosFrom) params.set("dosFrom", filters.dosFrom);
     if (filters.dosTo) params.set("dosTo", filters.dosTo);
@@ -196,6 +248,8 @@ export function BatchClaimsPanel({
     filters.insurance,
     filters.aging,
     filters.provider,
+    filters.assignedTo,
+    filters.actionable,
     filters.visitStatus,
     filters.dosFrom,
     filters.dosTo,
@@ -283,6 +337,7 @@ export function BatchClaimsPanel({
         body: JSON.stringify({
           claimIds: Array.from(selected),
           assignedToId: assignTo === "__unassign__" ? null : assignTo,
+          includeNotActionable: assignNotActionable,
         }),
       });
 
@@ -293,8 +348,13 @@ export function BatchClaimsPanel({
         return;
       }
 
+      // The server drops 0–30 day claims unless asked otherwise, so the toast
+      // says what actually happened rather than what was selected.
       toast(
-        `${payload.updated} claim${payload.updated === 1 ? "" : "s"} assigned`,
+        `${payload.updated} claim${payload.updated === 1 ? "" : "s"} assigned` +
+          (payload.skipped > 0
+            ? ` · ${payload.skipped} skipped as not yet actionable`
+            : ""),
       );
       setSelected(new Set());
       setAssignTo("");
@@ -305,6 +365,21 @@ export function BatchClaimsPanel({
     } finally {
       setAssigning(false);
     }
+  }
+
+  /**
+   * Route a handed-back claim to a biller.
+   *
+   * Selects just this claim and seeds the assign dropdown with whoever passed
+   * it over, since sending it back to them is the common case — the manager
+   * has answered the question they were stuck on. It is only a default: the
+   * dropdown is right there to change.
+   */
+  function routeBack(claim: PanelClaim) {
+    setSelected(new Set([claim.id]));
+    setAssignTo(claim.reassignment?.reassignedById ?? "");
+    // The assign controls live in the filter bar above the table.
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -346,7 +421,10 @@ export function BatchClaimsPanel({
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center gap-1 border-b border-slate-200">
+      <div
+        id="reassigned-to-me"
+        className="mb-4 flex flex-wrap items-center gap-1 border-b border-slate-200"
+      >
         {TABS.map((entry) => (
           <button
             key={entry.key}
@@ -361,7 +439,40 @@ export function BatchClaimsPanel({
             {entry.label}
           </button>
         ))}
+
+        {showReassignedTab ? (
+          <button
+            type="button"
+            onClick={() => setFilters({ tab: "reassigned" })}
+            className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              tab === "reassigned"
+                ? "border-brand-600 text-brand-700"
+                : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}
+          >
+            Reassigned to Me
+            {/* Amber, because this is somebody waiting on the manager. */}
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
+                reassignedCount > 0
+                  ? "bg-amber-100 text-amber-800 ring-1 ring-inset ring-amber-200"
+                  : "bg-slate-100 text-slate-500"
+              }`}
+            >
+              {reassignedCount}
+            </span>
+          </button>
+        ) : null}
       </div>
+
+      {tab === "reassigned" ? (
+        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-inset ring-amber-100">
+          Claims a biller could not finish and handed to you — either a blue
+          status, which escalates on its own, or one they reassigned
+          deliberately. Work it yourself, or route it back with the assign
+          dropdown.
+        </p>
+      ) : null}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <MultiSelectDropdown
@@ -405,6 +516,50 @@ export function BatchClaimsPanel({
           aria-label="Provider"
           className="w-auto min-w-[200px]"
         />
+
+        {/*
+          "Unassigned" sits at the top of the same list as the people, because
+          "who is this with?" is one question and nobody is a valid answer to
+          it. Only rendered where an assignee list exists — a biller sees only
+          their own claims, so the filter would have one option.
+        */}
+        {canAssign ? (
+          <MultiSelectDropdown
+            options={[
+              { label: "— Unassigned —", value: UNASSIGNED },
+              ...assignees.map((user) => ({
+                label: user.name,
+                value: user.id,
+              })),
+            ]}
+            selected={filters.assignedTo}
+            onChange={(next) => setFilters({ assignedTo: next })}
+            placeholder="Anyone"
+            allLabel="Assigned To: anyone"
+            noun="people"
+            aria-label="Assigned to"
+            className="w-auto min-w-[190px]"
+          />
+        ) : null}
+
+        {/*
+          0–30 day claims stay in the list by default — a PM needs the whole
+          book — so this narrows in either direction rather than hiding them.
+        */}
+        <Select
+          value={filters.actionable}
+          onChange={(event) => setFilters({ actionable: event.target.value })}
+          aria-label="Actionable claims"
+          className="w-auto min-w-[190px]"
+        >
+          <option value="">All ages</option>
+          <option value="only">
+            Actionable only ({NOT_ACTIONABLE_MAX_DAYS + 1}+ days)
+          </option>
+          <option value="not-actionable">
+            0–{NOT_ACTIONABLE_MAX_DAYS} day claims only
+          </option>
+        </Select>
 
         <div className="flex items-center gap-1.5">
           <label htmlFor="dosFrom" className="text-xs text-slate-500">
@@ -515,6 +670,20 @@ export function BatchClaimsPanel({
             <span className="text-xs text-slate-500">
               {selected.size} selected
             </span>
+            <label
+              className="flex items-center gap-1.5 text-xs text-slate-600"
+              title={`0–${NOT_ACTIONABLE_MAX_DAYS} day claims are skipped unless this is ticked — insurance has not had time to process them.`}
+            >
+              <input
+                type="checkbox"
+                checked={assignNotActionable}
+                onChange={(event) =>
+                  setAssignNotActionable(event.target.checked)
+                }
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-600"
+              />
+              Include 0–{NOT_ACTIONABLE_MAX_DAYS} day claims
+            </label>
             <Select
               value={assignTo}
               onChange={(event) => setAssignTo(event.target.value)}
@@ -643,6 +812,29 @@ export function BatchClaimsPanel({
                         >
                           {claim.patientName}
                         </Link>
+                        {/*
+                          On the reassigned tab, who passed it over and what
+                          they said. The note is the context that saves the
+                          manager opening the claim to find out why.
+                        */}
+                        {claim.reassignment ? (
+                          <span className="mt-0.5 block text-xs text-amber-700">
+                            ↩ Reassigned by {claim.reassignment.reassignedByName}
+                            <span
+                              className="block text-slate-500"
+                              title={claim.reassignment.note}
+                            >
+                              {claim.reassignment.note.length > 90
+                                ? `${claim.reassignment.note.slice(0, 90)}…`
+                                : claim.reassignment.note}
+                            </span>
+                          </span>
+                        ) : tab === "reassigned" &&
+                          claim.statusCategory === "BLUE" ? (
+                          <span className="mt-0.5 block text-xs text-sky-700">
+                            Escalated by blue status
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-slate-600">
                         {claim.insuranceName}
@@ -679,7 +871,7 @@ export function BatchClaimsPanel({
                         {formatUSD(claim.balance)}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <AgingBadge days={claim.agingDays} />
+                        <AgingBadge days={claim.agingDays} withLabel />
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge
@@ -708,12 +900,32 @@ export function BatchClaimsPanel({
                         )}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <Link
-                          href={`/ar/claims/${claim.id}`}
-                          className="text-xs font-medium text-brand-700 hover:text-brand-800"
-                        >
-                          View
-                        </Link>
+                        {tab === "reassigned" ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <Link
+                              href={`/ar/claims/${claim.id}`}
+                              className="text-xs font-medium text-brand-700 hover:text-brand-800"
+                            >
+                              Work it
+                            </Link>
+                            {canAssign && !batchClosed ? (
+                              <button
+                                type="button"
+                                onClick={() => routeBack(claim)}
+                                className="text-xs font-medium text-slate-500 hover:text-slate-800"
+                              >
+                                Reassign
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <Link
+                            href={`/ar/claims/${claim.id}`}
+                            className="text-xs font-medium text-brand-700 hover:text-brand-800"
+                          >
+                            View
+                          </Link>
+                        )}
                       </td>
                     </tr>
                   );

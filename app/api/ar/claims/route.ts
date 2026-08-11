@@ -8,7 +8,9 @@ import {
   zodErrorResponse,
 } from "@/lib/api-helpers";
 import { canAccessBatch } from "@/lib/ar-access";
+import { ACTIONABLE_WHERE, NOT_ACTIONABLE_WHERE } from "@/lib/ar-actionable";
 import { agingBucketFilter } from "@/lib/ar-aging";
+import { manuallyReassignedTo } from "@/lib/ar-reassignment";
 import { CLAIM_INCLUDE, toClaimDto } from "@/lib/ar-serialize";
 import { startOfTodayUtc } from "@/lib/ar-stats";
 import { prisma } from "@/lib/prisma";
@@ -69,6 +71,10 @@ export async function GET(request: NextRequest) {
     direction: searchParams.get("direction") ?? undefined,
     agingBucket: searchParams.get("agingBucket") ?? undefined,
     overdue: searchParams.get("overdue") ?? undefined,
+    assignedToIds: searchParams.get("assignedToIds") ?? undefined,
+    includeUnassigned: searchParams.get("includeUnassigned") ?? undefined,
+    reassignedToMe: searchParams.get("reassignedToMe") ?? undefined,
+    actionable: searchParams.get("actionable") ?? undefined,
   });
 
   if (!query.success) {
@@ -128,6 +134,47 @@ export async function GET(request: NextRequest) {
   }
 
   /**
+   * The "Assigned To" filter. "Unassigned" is a choice alongside the people,
+   * not one of them, so the two combine as an OR: show what nobody holds, or
+   * what these people hold, or both.
+   */
+  const assignees: Prisma.ArClaimWhereInput[] = [];
+
+  if (filters.includeUnassigned === "true") {
+    assignees.push({ assignedToId: null });
+  }
+
+  if (filters.assignedToIds) {
+    assignees.push({ assignedToId: { in: filters.assignedToIds } });
+  }
+
+  if (assignees.length > 0) anyOf.push({ OR: assignees });
+
+  /**
+   * Claims handed to the caller: a blue status moved it, or a note named them.
+   * The second cannot be read from the claim — `assignedToId` says who holds
+   * it now, not how it got there — so the note history answers it, in one
+   * query for the batch rather than one per claim.
+   */
+  let reassignment: Awaited<ReturnType<typeof manuallyReassignedTo>> | null =
+    null;
+
+  if (filters.reassignedToMe === "true") {
+    reassignment = await manuallyReassignedTo({
+      userId: session!.user.id,
+      batchId: filters.batchId,
+    });
+
+    anyOf.push({
+      assignedToId: session!.user.id,
+      OR: [
+        { statusCategory: StatusCategory.BLUE },
+        { id: { in: reassignment.claimIds } },
+      ],
+    });
+  }
+
+  /**
    * Free text spans the patient, the CPT and the visit id — one box, three
    * places to look. The visit id is how some practices refer to an encounter
    * on the phone, so it belongs in the same box rather than a field of its own.
@@ -175,6 +222,15 @@ export async function GET(request: NextRequest) {
       ? { insuranceName: { contains: filters.insuranceName, mode: "insensitive" as const } }
       : {}),
     ...(agingFilter ? { agingDays: agingFilter } : {}),
+    /**
+     * 0–30 day claims stay visible in the batch list by default — a PM needs
+     * the whole book — so this filter only ever narrows, in either direction.
+     */
+    ...(filters.actionable === "only"
+      ? ACTIONABLE_WHERE
+      : filters.actionable === "not-actionable"
+        ? NOT_ACTIONABLE_WHERE
+        : {}),
     ...(filters.overdue === "true"
       ? {
           statusCategory: StatusCategory.RED,
@@ -195,5 +251,17 @@ export async function GET(request: NextRequest) {
     prisma.arClaim.count({ where }),
   ]);
 
-  return paginatedResponse(claims.map(toClaimDto), total, pagination);
+  /**
+   * The hand-over context rides along on the rows that have one, so the
+   * "Reassigned to Me" tab can say who passed the claim over and why without
+   * a second request per row.
+   */
+  return paginatedResponse(
+    claims.map((claim) => ({
+      ...toClaimDto(claim),
+      reassignment: reassignment?.context.get(claim.id) ?? null,
+    })),
+    total,
+    pagination,
+  );
 }

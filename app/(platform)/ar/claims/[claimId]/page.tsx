@@ -238,6 +238,20 @@ export default async function ClaimDetailPage({
                 </span>
               </Row>
               <Row label="CPT code">{claim.cptCode ?? "—"}</Row>
+              {/*
+                Optional reference fields only some EHRs export. Rendered only
+                when the claim carries one: a row of dashes on every claim in
+                the system to serve the few that have them is a worse trade
+                than the field being absent where it is meaningless.
+              */}
+              {claim.visitId ? (
+                <Row label="Visit ID">
+                  <span className="font-mono text-xs">{claim.visitId}</span>
+                </Row>
+              ) : null}
+              {claim.visitStatus ? (
+                <Row label="Visit Status">{claim.visitStatus}</Row>
+              ) : null}
               <Row label="Patient ID">{claim.patientId ?? "—"}</Row>
               <Row label="Subscriber ID">{claim.subscriberId ?? "—"}</Row>
               <Row label="Provider">

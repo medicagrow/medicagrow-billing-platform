@@ -1,4 +1,5 @@
 import { BatchStatus, Role, StatusCategory } from "@/lib/generated/prisma/enums";
+import { ACTIONABLE_WHERE, NOT_ACTIONABLE_WHERE } from "@/lib/ar-actionable";
 import { daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
 import { centsToDecimalString, toCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
@@ -22,12 +23,20 @@ export interface PracticeSummaryRow {
 
 export interface ArSummary {
   openBatchCount: number;
+  /**
+   * Balance and claim count over **actionable claims only** — 0–30 day claims
+   * are not yet workable, and a headline the team cannot move is noise. The
+   * insurance aging table below still shows the 0–30 bucket in full.
+   */
   totalBalance: string;
   totalClaims: number;
   totalGreenClaims: number;
   totalRedClaims: number;
   overdueCount: number;
   percentComplete: number;
+  /** What the figures above left out, for the footnote that says so. */
+  notActionableClaims: number;
+  notActionableBalance: string;
   practices: PracticeSummaryRow[];
 }
 
@@ -71,31 +80,47 @@ export async function arSummary({
 
   const claimScope = assignedToId ? { assignedToId } : {};
 
-  const [byCategory, overdueCount, ownTotals] = await Promise.all([
-    prisma.arClaim.groupBy({
-      by: ["batchId", "statusCategory"],
-      where: { batchId: { in: batchIds }, ...claimScope },
-      _count: { _all: true },
-    }),
-    prisma.arClaim.count({
-      where: {
-        batchId: { in: batchIds },
-        statusCategory: StatusCategory.RED,
-        followUpDate: { lt: today },
-        ...claimScope,
-      },
-    }),
-    // A batch's own totals count claims that were never this biller's, so
-    // their per-batch totals are recomputed from the claims they hold.
-    assignedToId
-      ? prisma.arClaim.groupBy({
-          by: ["batchId"],
-          where: { batchId: { in: batchIds }, ...claimScope },
-          _count: { _all: true },
-          _sum: { balance: true },
-        })
-      : Promise.resolve([]),
-  ]);
+  /**
+   * Every figure here is over **actionable claims** — aged past 30 days. The
+   * batch's own denormalised `totalClaims`/`totalBalance` columns count the
+   * whole upload, so the per-batch totals are recomputed from the claims
+   * instead: one grouped query for all batches, not one per batch.
+   */
+  const actionableScope = { ...claimScope, ...ACTIONABLE_WHERE };
+
+  const [byCategory, overdueCount, batchTotals, notActionable] =
+    await Promise.all([
+      prisma.arClaim.groupBy({
+        by: ["batchId", "statusCategory"],
+        where: { batchId: { in: batchIds }, ...actionableScope },
+        _count: { _all: true },
+      }),
+      prisma.arClaim.count({
+        where: {
+          batchId: { in: batchIds },
+          statusCategory: StatusCategory.RED,
+          followUpDate: { lt: today },
+          ...actionableScope,
+        },
+      }),
+      prisma.arClaim.groupBy({
+        by: ["batchId"],
+        where: { batchId: { in: batchIds }, ...actionableScope },
+        _count: { _all: true },
+        _sum: { balance: true },
+      }),
+      // What the headline leaves out, so the page can say so rather than
+      // quietly showing a smaller number than the batch list does.
+      prisma.arClaim.aggregate({
+        where: {
+          batchId: { in: batchIds },
+          ...claimScope,
+          ...NOT_ACTIONABLE_WHERE,
+        },
+        _count: { _all: true },
+        _sum: { balance: true },
+      }),
+    ]);
 
   const countFor = (batchId: string, category: StatusCategory) =>
     byCategory.find(
@@ -110,13 +135,9 @@ export async function arSummary({
   const practices: PracticeSummaryRow[] = batches.map((batch) => {
     const greenCount = countFor(batch.id, StatusCategory.GREEN);
 
-    const own = ownTotals.find((row) => row.batchId === batch.id);
-    const batchClaims = assignedToId
-      ? (own?._count._all ?? 0)
-      : batch.totalClaims;
-    const batchBalance = assignedToId
-      ? (own?._sum.balance?.toString() ?? "0.00")
-      : batch.totalBalance.toString();
+    const own = batchTotals.find((row) => row.batchId === batch.id);
+    const batchClaims = own?._count._all ?? 0;
+    const batchBalance = own?._sum.balance?.toString() ?? "0.00";
 
     totalCents += toCents(batchBalance);
     totalClaims += batchClaims;
@@ -148,6 +169,8 @@ export async function arSummary({
       totalClaims === 0
         ? 0
         : Math.round((totalGreenClaims / totalClaims) * 100),
+    notActionableClaims: notActionable._count._all,
+    notActionableBalance: (notActionable._sum.balance ?? 0).toString(),
     practices,
   };
 }
@@ -257,9 +280,15 @@ export async function billerProgress({
       ? {}
       : { practiceId: { in: practiceIds } };
 
+  /**
+   * A biller's throughput is measured against what they could work: 0–30 day
+   * claims are excluded from both halves, exactly as they are from the batch
+   * completion rate.
+   */
   const where = {
     assignedToId: { not: null },
     batch: { status: BatchStatus.OPEN, ...practiceFilter },
+    ...ACTIONABLE_WHERE,
   };
 
   const [assigned, completed] = await Promise.all([

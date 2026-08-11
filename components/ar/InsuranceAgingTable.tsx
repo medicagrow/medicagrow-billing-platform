@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
+import { NOT_ACTIONABLE_MAX_DAYS } from "@/lib/ar-actionable";
 import type {
   CategoryFilter,
   InsuranceAgingByCategory,
@@ -297,6 +298,26 @@ export function InsuranceAgingTable({
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums text-slate-900">
                   {formatUSD(centsToDecimalString(totals.totalCents))}
+                </td>
+              </tr>
+              {/*
+                This table's totals are the whole book, 0–30 bucket included —
+                the question here is what is outstanding. The summary cards at
+                the top of the page ask a different question and answer it
+                differently, so the difference is stated rather than left to be
+                discovered.
+              */}
+              <tr>
+                <td
+                  colSpan={BUCKET_COLUMNS.length + 3}
+                  className="px-4 pb-3 text-xs font-normal text-slate-500"
+                >
+                  Includes the 0–{NOT_ACTIONABLE_MAX_DAYS} day bucket
+                  {totals.bucketClaims.bucket0_30
+                    ? ` (${totals.bucketClaims.bucket0_30} claims, ${formatUSD(centsToDecimalString(totals.bucketCents.bucket0_30!))})`
+                    : ""}
+                  . The summary cards above exclude it — those claims are not
+                  yet actionable.
                 </td>
               </tr>
             </tfoot>

@@ -58,6 +58,13 @@ export const assignClaimSchema = z.object({
 export const bulkAssignSchema = z.object({
   claimIds: z.array(z.string().min(1)).min(1, "Select at least one claim"),
   assignedToId: z.string().min(1).nullable(),
+  /**
+   * 0–30 day claims are skipped unless this is set. Enforced on the server
+   * rather than by filtering the selection in the browser: the selection is
+   * made against a list that deliberately still shows them, and a rule about
+   * what may be handed to a biller belongs where it cannot be bypassed.
+   */
+  includeNotActionable: z.boolean().optional(),
 });
 
 /**
@@ -82,6 +89,25 @@ export const listClaimsQuerySchema = z.object({
   batchId: z.string().min(1, "batchId is required"),
   assignedToId: z.string().optional(),
   unassigned: z.enum(["true", "false"]).optional(),
+  /**
+   * The "Assigned To" multi-select. `includeUnassigned` is its own flag rather
+   * than a magic id in the list, because "nobody" is not a user and a sentinel
+   * string in a list of ids is the kind of thing that later gets looked up.
+   * Both together read as OR: unassigned, or held by one of these people.
+   */
+  assignedToIds: csvList,
+  includeUnassigned: z.enum(["true", "false"]).optional(),
+  /**
+   * Claims handed to the caller — a blue-status escalation, or a note that
+   * named them. Derived from the note history, so the route resolves it before
+   * querying rather than expressing it as a column.
+   */
+  reassignedToMe: z.enum(["true", "false"]).optional(),
+  /**
+   * Whether 0–30 day claims are in scope. They stay visible in the batch list
+   * by default (a PM needs the whole book), so this only ever narrows.
+   */
+  actionable: z.enum(["only", "not-actionable"]).optional(),
   statusCategory: z.enum(StatusCategory).optional(),
   statusLabel: z.string().optional(),
   /** Kept for callers still passing one name as a substring match. */

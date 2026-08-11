@@ -1,6 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { apiErrorResponse, requireAuth } from "@/lib/api-helpers";
-import { canAccessBatch, practiceAssignees } from "@/lib/ar-access";
+import {
+  canAccessBatch,
+  canManageBatches,
+  practiceAssignees,
+} from "@/lib/ar-access";
+import { countReassignedToMe } from "@/lib/ar-reassignment";
 import { batchStats, daysBetween } from "@/lib/ar-stats";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
@@ -33,9 +38,14 @@ export async function GET(
 
   // Who this batch's claims can be assigned to: the practice's own people,
   // plus Owners, who hold no membership rows but can reach everything.
-  const [stats, practiceUsers] = await Promise.all([
+  const [stats, practiceUsers, reassignedToMeCount] = await Promise.all([
     batchStats(batch.id),
     practiceAssignees(batch.practiceId),
+    // What a biller has handed back and is waiting on this manager. Zero for
+    // a biller, who has nobody to escalate to.
+    canManageBatches(session!.user)
+      ? countReassignedToMe(session!.user.id, batch.id)
+      : Promise.resolve(0),
   ]);
 
   return NextResponse.json({
@@ -58,5 +68,6 @@ export async function GET(
     },
     stats,
     practiceUsers,
+    reassignedToMeCount,
   });
 }
