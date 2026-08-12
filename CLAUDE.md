@@ -658,23 +658,25 @@ planning around only their own would over-commit somebody already full. What
 paler, and not offered for editing — accurate capacity without exposing another
 PM's task detail.
 
-### Biller capacity, before the claims are handed out
+### Minutes per claim
 
-`GET /api/ar/batches/[batchId]/biller-capacity` answers "who has room for this
-batch" beside the assign controls, over the batch's own life (upload date →
-target date, or end of month).
+[lib/analytics/claim-avg.ts](lib/analytics/claim-avg.ts) derives how long a
+biller actually takes per claim, from closed Claim Follow-up tasks:
+`totalLoggedMinutes ÷ productivityCount`, both of which are measured rather
+than typed.
 
-- **Free hours** come from `getWorkloadData()` rather than a second
-  calculation — two answers to "how booked is this person" would drift.
-  Non-AR load only, since the AR half is subtracted separately and shown
-  broken down by practice with the PM who owns each.
-- **Estimated claims capacity** divides net hours by
-  `getAvgMinutesPerClaim()` in [lib/analytics/claim-avg.ts](lib/analytics/claim-avg.ts):
-  closed Claim Follow-up tasks' `totalLoggedMinutes ÷ productivityCount`, both
-  of which are now measured rather than typed. **Minimum five tasks** — two is
-  an anecdote — then it falls back to the team average and says so. Summed then
-  divided, never an average of per-task rates, so a two-claim task cannot swing
-  it. Cached an hour per instance, the same trade `lib/lazy-schedule.ts` makes.
+- **Minimum five tasks** — two is an anecdote, not a rate — then it falls back
+  to the team average and reports which it used. Summed then divided, never an
+  average of per-task rates, so a two-claim task cannot swing it.
+- Cached an hour per instance, the same trade `lib/lazy-schedule.ts` makes.
+  `claimRatesFor()` resolves a whole roster in **one grouped query**.
+- **Currently unreferenced.** It backed a capacity sidebar on the AR batch
+  page, which was removed — capacity planning belongs in the Workload Planner,
+  and the batch page points there instead. Kept for the planner to use.
+
+**The AR batch page does not do capacity planning.** It is a claim list, a bulk
+assign control and a close button; the assign bar carries a link to
+`/analytics/workload` rather than a second screen's worth of numbers.
 
 ```bash
 npx tsx scripts/test-daily-hours.ts  # spread, sequential, simultaneous, unconfigured, non-AR

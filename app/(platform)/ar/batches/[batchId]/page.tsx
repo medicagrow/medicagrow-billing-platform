@@ -6,7 +6,6 @@ import {
   BatchClaimsPanel,
   type TabKey,
 } from "@/components/ar/BatchClaimsPanel";
-import { BillerCapacityPanel } from "@/components/ar/BillerCapacityPanel";
 import { CloseBatchButton } from "@/components/ar/CloseBatchButton";
 import { CategoryPills } from "@/components/ar/StatusBadge";
 import { TargetDateEditor } from "@/components/ar/TargetDateEditor";
@@ -263,17 +262,6 @@ export default async function BatchDetailPage({
           ) : null}
         </div>
       </div>
-
-      {/*
-        Beside the assign controls rather than inside a modal: the decision the
-        PM is making is "who has room", and hiding the answer behind a click
-        means it gets made without it.
-      */}
-      {isManager && !closed ? (
-        <div className="mb-5">
-          <BillerCapacityPanel batchId={batch.id} />
-        </div>
-      ) : null}
 
       <BatchClaimsPanel
         batchId={batch.id}

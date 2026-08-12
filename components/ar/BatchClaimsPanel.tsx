@@ -715,6 +715,18 @@ export function BatchClaimsPanel({
             >
               {assigning ? "Assigning…" : "Apply"}
             </Button>
+
+            {/*
+              Capacity planning lives in the planner, not here. A pointer keeps
+              the question answerable without putting a second screen's worth
+              of numbers beside a dropdown.
+            */}
+            <Link
+              href="/analytics/workload"
+              className="whitespace-nowrap text-xs font-medium text-brand-700 hover:text-brand-800"
+            >
+              Check biller availability → Workload Planner
+            </Link>
           </div>
         ) : null}
       </div>
