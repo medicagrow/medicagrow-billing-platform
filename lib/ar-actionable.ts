@@ -36,6 +36,15 @@ export const NOT_ACTIONABLE_WHERE = {
   agingDays: { lte: NOT_ACTIONABLE_MAX_DAYS },
 } as const;
 
+/**
+ * The `AGING_BUCKETS` key covering these claims.
+ *
+ * Named here rather than written out at the call site: selecting that bucket
+ * is one of the two ways of asking to see them, and the list that excludes
+ * them by default has to recognise it.
+ */
+export const NOT_ACTIONABLE_BUCKET = "0-30";
+
 /** The label shown wherever one of these claims is drawn. */
 export const NOT_ACTIONABLE_LABEL = "Not yet actionable";
 

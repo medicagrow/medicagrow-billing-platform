@@ -82,7 +82,15 @@ export async function GET(request: NextRequest) {
     NOT: { isRecurring: true, parentTaskId: null },
     ...(filters.assignedToId ? { assignedToId: filters.assignedToId } : {}),
     ...(filters.createdById ? { createdById: filters.createdById } : {}),
-    ...(filters.status ? { status: filters.status } : {}),
+    /**
+     * No status asked for means "what is still on our plate" — a list whose
+     * default is every task ever closed grows without bound and buries the
+     * work. Asking for CLOSED explicitly returns it, which is how a biller
+     * reviews what they finished.
+     */
+    ...(filters.status
+      ? { status: filters.status }
+      : { status: { in: NOT_CLOSED } }),
     ...(filters.priority ? { priority: filters.priority } : {}),
     ...(filters.practiceId ? { practiceId: filters.practiceId } : {}),
     ...(filters.taskTypeId ? { taskTypeId: filters.taskTypeId } : {}),

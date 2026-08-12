@@ -104,10 +104,15 @@ export const listClaimsQuerySchema = z.object({
    */
   reassignedToMe: z.enum(["true", "false"]).optional(),
   /**
-   * Whether 0–30 day claims are in scope. They stay visible in the batch list
-   * by default (a PM needs the whole book), so this only ever narrows.
+   * Brings the 0–30 day bucket back into a list that excludes it by default.
+   *
+   * The default is exclusion because the list is a work queue first: a batch
+   * uploaded this month is mostly claims nobody may act on yet, and burying
+   * the workable ones among them makes the page useless. Selecting the 0–30
+   * aging bucket explicitly is the other way in — asking for that bucket is
+   * already saying you want it.
    */
-  actionable: z.enum(["only", "not-actionable"]).optional(),
+  includeNotActionable: z.enum(["true", "false"]).optional(),
   statusCategory: z.enum(StatusCategory).optional(),
   statusLabel: z.string().optional(),
   /** Kept for callers still passing one name as a substring match. */

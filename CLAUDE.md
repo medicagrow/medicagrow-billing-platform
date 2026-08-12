@@ -224,6 +224,49 @@ other and must not be merged.
   practice with. Only a task with **no practice at all** is placed by who holds
   it. The Team page counts through `teamTaskScope()` for the same reason, so a
   shared biller's totals match the list they link to.
+- **A closed task is out of the default list, not out of reach.** `GET
+  /api/tasks` and `GET /api/tasks/my-tasks` both default to
+  `{ OPEN, IN_PROCESS, HOLD }`; asking for `status=CLOSED` returns closed work,
+  and the empty option in both dropdowns reads "Open, in process & hold" rather
+  than claiming to show everything. My Tasks sends the status **to the API** —
+  filtering it over already-fetched rows matched nothing, since the queue never
+  fetched a closed task. Closed results order by `completedAt` desc: once the
+  thing is done, the due date is the wrong axis.
+  - This is also what made a **time-edit request look unavailable** after a
+    close. The 48-hour window has always been measured from
+    `TaskTimeLog.startedAt` with no reference to task status — but the task had
+    vanished from My Tasks, so the panel holding the link could not be opened.
+- **Productivity is counted, not typed, for the two module-backed task types.**
+  `autoLinkProductivity()` in
+  [lib/task/productivity-auto-link.ts](lib/task/productivity-auto-link.ts)
+  intersects the biller's **stopped timer sessions** with the **AR or EOB work
+  notes they wrote inside them**, scoped to the task's practice when it has
+  one. Which types this covers is `autoSourceModule` in
+  [productivity-config.ts](lib/task/productivity-config.ts), so the UI that
+  says "auto-calculated" and the code that calculates cannot drift.
+  - Run on close, in `PATCH /api/tasks/[taskId]`, and attributed to the
+    **assignee** rather than whoever pressed close.
+  - `GET /api/tasks/[taskId]/productivity-preview` runs the same function
+    without writing, so the confirmation screen shows the number that will be
+    saved rather than a second estimate of it. A count of 0 is an amber warning,
+    not a block — working off the clock is a reason to check, not to refuse.
+  - **No timer means 0, not null.** The type is auto-counted; returning null
+    would hand it back to whoever is typing.
+  - Manual entry for every other type now actually persists — `productivityCount`
+    and `productivityAmount` were in the schema and posted by the form, but the
+    route never wrote them.
+- **PM/Owner correct a time log outright**, through `PATCH
+  /api/tasks/time-logs/[logId]/direct-edit`. The request/approve flow exists so
+  nobody edits *their own* logged time; a manager correcting somebody else's is
+  not that situation, and filing a request to themselves would be a form with
+  one signature on both lines. It keeps the overlap check and the
+  once-only `originalDurationMinutes`, and drops the 48-hour window — that
+  window protects against an unreviewed change, and this edit carries the
+  manager's name. Scope is `canManageTaskTime()` in
+  [lib/task-access.ts](lib/task-access.ts), deliberately wider than
+  `canEditTask` (a PM may not rewrite another person's task but may fix its
+  clock). Every such edit appears in the **Direct edits** table under the
+  approval queue on Tasks → Team, since it has no second signature.
 - **A biller cannot close a task with an empty timer** — `PATCH
   /api/tasks/[taskId]` returns 400 "Timer entry required before closing". PMs
   and Owners are exempt: they close work they manage but did not personally do.
@@ -296,6 +339,7 @@ npx tsx scripts/test-tasks.ts       # hold-release automation
 npx tsx scripts/test-task-scoping.ts # PM sees their practices, not their billers'
 npx tsx scripts/test-recurrence.ts  # recurrence dates, series generation, task types
 npx tsx scripts/test-timer.ts       # task timer, edit window, overlap rule
+npx tsx scripts/test-productivity-autolink.ts # counting AR/EOB work inside timer sessions
 npx tsx scripts/test-schedule.ts    # 24h grid geometry, provider roster match
 npx tsx scripts/test-eob-status.ts  # consolidated EOB status list
 ```
@@ -396,15 +440,26 @@ had time to process it, so calling about one is a wasted call. The flag is
 `NOT_ACTIONABLE_WHERE` in [lib/ar-actionable.ts](lib/ar-actionable.ts), free of
 Prisma so client components can import it.
 
-These claims stay **fully visible** — a PM needs the whole book. What they are
-out of is *work*:
+They are **out of every list by default** and brought back by a checkbox. The
+batch list first shipped showing them, on the reasoning that a PM needs the
+whole book; in practice a freshly uploaded batch is mostly claims nobody may
+act on, and they buried the workable ones. So:
 
-- **My Queue** excludes them; `includeNotActionable=true` and a "Show 0–30 day
-  claims" toggle bring them back for a biller with a clear queue.
-- **Bulk assign** skips them and reports how many it skipped, unless
-  `includeNotActionable` is set. Enforced in the route, not by filtering the
-  selection in the browser — the list deliberately still shows them.
-  Unassigning is exempt: taking work back is never premature.
+- **My Queue** and the **batch claim list** both exclude them, both take
+  `includeNotActionable=true`, and both render the same "Include 0–30 day
+  claims" checkbox. The batch list's shows how many are hidden.
+- **Selecting the 0–30 aging bucket also brings them back**, in the batch list.
+  Without that, choosing that bucket returns an empty table, which reads as a
+  broken filter rather than as a rule. `NOT_ACTIONABLE_BUCKET` names the key.
+- The exclusion goes into the route's **`AND: []` array**, not the `where`
+  object: a selected bucket already writes a top-level `agingDays`, and the
+  object spread would silently drop one of the two.
+- **Bulk assign** skips them and reports how many it skipped, unless its own
+  "Include 0–30 day claims" checkbox is ticked. Enforced in the route rather
+  than by filtering the selection in the browser: the list checkbox can put
+  them back on screen, and a rule about what may be handed to a biller belongs
+  where it cannot be bypassed. Unassigning is exempt — taking work back is
+  never premature.
 - **Every completion percentage** is over actionable claims alone, numerator
   and denominator both. `batchStats` keeps `greenCount`/`redCount`/`blueCount`
   over the **whole** batch — the close dialog must still see fresh unworked

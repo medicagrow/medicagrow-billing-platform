@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/ui/Card";
 import { FieldError, Input } from "@/components/ui/Input";
 import { useToast } from "@/components/ui/toast";
 import { formatMinutes } from "@/lib/task-timer-serialize";
-import { formatDateIST, formatTimeIST } from "@/lib/timezone";
+import { formatDateIST, formatDateTimeIST, formatTimeIST } from "@/lib/timezone";
 
 interface EditRequestRow {
   id: string;
@@ -231,6 +231,130 @@ export function TimeEditRequestsPanel() {
         <Badge variant="sky">Pending only</Badge> Approved and rejected
         requests leave this queue.
       </p>
+
+      <DirectEditsSection />
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+interface DirectEditRow {
+  logId: string;
+  taskId: string;
+  taskLabel: string;
+  practiceName: string | null;
+  billerName: string;
+  startedAt: string;
+  stoppedAt: string | null;
+  durationMinutes: number | null;
+  originalDurationMinutes: number | null;
+  editNote: string | null;
+  editedByName: string | null;
+  editedAt: string | null;
+}
+
+/**
+ * Corrections a manager applied without an approval step.
+ *
+ * Read-only, and deliberately sitting under the queue rather than somewhere
+ * else: a direct edit carries no second signature, so this record is the only
+ * check on it, and it belongs where the people who can make one will see it.
+ */
+function DirectEditsSection() {
+  const [rows, setRows] = useState<DirectEditRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let live = true;
+
+    (async () => {
+      try {
+        const response = await fetch("/api/tasks/time-logs/direct-edits");
+        if (response.ok && live) {
+          const payload = await response.json();
+          setRows(payload.data);
+        }
+      } finally {
+        if (live) setLoading(false);
+      }
+    })();
+
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (loading) return null;
+
+  return (
+    <div className="mt-6 border-t border-slate-200 pt-4">
+      <h4 className="text-sm font-semibold text-slate-900">Direct edits</h4>
+      <p className="mt-0.5 text-xs text-slate-500">
+        Time corrections a manager applied without an approval step, over the
+        last 30 days.
+      </p>
+
+      {rows.length === 0 ? (
+        <p className="mt-3 text-xs text-slate-500">
+          No direct edits in this period.
+        </p>
+      ) : (
+        <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full min-w-[840px] text-xs">
+            <thead className="border-b border-slate-200 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Task</th>
+                <th className="px-3 py-2">Biller</th>
+                <th className="px-3 py-2">Original</th>
+                <th className="px-3 py-2">New</th>
+                <th className="px-3 py-2">Edit note</th>
+                <th className="px-3 py-2">Edited by</th>
+                <th className="px-3 py-2">Edited at</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rows.map((row) => (
+                <tr key={row.logId}>
+                  <td className="px-3 py-2 text-slate-800">
+                    {row.taskLabel}
+                    {row.practiceName ? (
+                      <span className="block text-slate-400">
+                        {row.practiceName}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2 text-slate-700">{row.billerName}</td>
+                  <td className="px-3 py-2 tabular-nums text-slate-500">
+                    {/*
+                      Only the duration survives a correction — the times the
+                      timer originally recorded are overwritten by design.
+                    */}
+                    {row.originalDurationMinutes === null
+                      ? "—"
+                      : formatMinutes(row.originalDurationMinutes)}
+                  </td>
+                  <td className="px-3 py-2 tabular-nums text-slate-900">
+                    {range(row.startedAt, row.stoppedAt)}
+                    <span className="block text-slate-500">
+                      {formatMinutes(row.durationMinutes)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-slate-600">
+                    {row.editNote ?? "—"}
+                  </td>
+                  <td className="px-3 py-2 text-slate-700">
+                    {row.editedByName ?? "—"}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2 text-slate-500">
+                    {row.editedAt ? formatDateTimeIST(row.editedAt) : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

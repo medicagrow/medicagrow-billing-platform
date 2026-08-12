@@ -37,10 +37,17 @@ function toLocalInput(iso: string): string {
 export function TaskTimerPanel({
   task,
   currentUserId,
+  canEditTimeDirectly = false,
   onChanged,
 }: {
   task: TaskDto;
   currentUserId: string;
+  /**
+   * PM or Owner: they correct a log outright rather than filing a request to
+   * themselves. Billers keep the approval flow, which is the whole point of
+   * it — nobody edits their own logged time.
+   */
+  canEditTimeDirectly?: boolean;
   onChanged: () => void;
 }) {
   const { toast } = useToast();
@@ -50,6 +57,9 @@ export function TaskTimerPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<TaskTimeLogDto | null>(null);
+  const [directEditing, setDirectEditing] = useState<TaskTimeLogDto | null>(
+    null,
+  );
 
   // Re-rendered every second only while a timer is running here.
   const [now, setNow] = useState(() => Date.now());
@@ -226,6 +236,22 @@ export function TaskTimerPanel({
                             Request Edit
                           </button>
                         ) : null}
+                        {/*
+                          A manager corrects it outright. No 48-hour window:
+                          they are the person that window was protecting
+                          against an unreviewed change, and the edit carries
+                          their name.
+                        */}
+                        {canEditTimeDirectly && log.stoppedAt !== null ? (
+                          <button
+                            type="button"
+                            onClick={() => setDirectEditing(log)}
+                            title="Edit this time log directly"
+                            className="font-medium text-slate-500 hover:text-slate-800"
+                          >
+                            ✎ Edit
+                          </button>
+                        ) : null}
                       </span>
                     </td>
                   </tr>
@@ -239,6 +265,18 @@ export function TaskTimerPanel({
           No time logged yet.
         </p>
       )}
+
+      {directEditing ? (
+        <DirectEditForm
+          log={directEditing}
+          onClose={() => setDirectEditing(null)}
+          onSaved={async () => {
+            setDirectEditing(null);
+            await loadLogs();
+            onChanged();
+          }}
+        />
+      ) : null}
 
       {editing ? (
         <EditRequestModal
@@ -396,5 +434,165 @@ function EditRequestModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A manager's correction, applied at once.
+ *
+ * Deliberately a panel rather than a modal: the request form is a modal
+ * because it interrupts to ask for something, while this is an edit made in
+ * place on a row the person is already looking at.
+ */
+function DirectEditForm({
+  log,
+  onClose,
+  onSaved,
+}: {
+  log: TaskTimeLogDto;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { toast } = useToast();
+
+  const [startedAt, setStartedAt] = useState(toLocalInput(log.startedAt));
+  const [stoppedAt, setStoppedAt] = useState(
+    log.stoppedAt ? toLocalInput(log.stoppedAt) : "",
+  );
+  const [editNote, setEditNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const newDuration =
+    startedAt && stoppedAt
+      ? Math.round(
+          (new Date(stoppedAt).getTime() - new Date(startedAt).getTime()) /
+            60_000,
+        )
+      : null;
+
+  async function save() {
+    setError(null);
+
+    if (!startedAt || !stoppedAt) return setError("Both times are required.");
+    if (newDuration === null || newDuration <= 0) {
+      return setError("The end time must be after the start time.");
+    }
+    if (editNote.trim() === "") {
+      return setError("Say why the time is being changed.");
+    }
+
+    setSaving(true);
+
+    try {
+      const response = await fetch(
+        `/api/tasks/time-logs/${log.id}/direct-edit`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            newStartedAt: new Date(startedAt).toISOString(),
+            newStoppedAt: new Date(stoppedAt).toISOString(),
+            editNote: editNote.trim(),
+          }),
+        },
+      );
+
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        // A 409 names the task the new range collides with, which is the only
+        // thing that makes the conflict fixable.
+        setError(payload?.error ?? "Could not save the correction.");
+        return;
+      }
+
+      toast("Time log corrected", "success");
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-brand-200 bg-brand-50/40 p-3">
+      <p className="mb-2 text-xs font-medium text-slate-700">
+        Editing {formatDateIST(log.startedAt)} · {clock(log.startedAt)} →{" "}
+        {log.stoppedAt ? clock(log.stoppedAt) : "—"} (
+        {formatMinutes(log.durationMinutes)})
+      </p>
+
+      {error ? (
+        <p className="mb-2">
+          <FieldError>{error}</FieldError>
+        </p>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor={`direct-start-${log.id}`}>New start time</Label>
+          <Input
+            id={`direct-start-${log.id}`}
+            type="datetime-local"
+            value={startedAt}
+            onChange={(event) => setStartedAt(event.target.value)}
+            disabled={saving}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`direct-stop-${log.id}`}>New end time</Label>
+          <Input
+            id={`direct-stop-${log.id}`}
+            type="datetime-local"
+            value={stoppedAt}
+            onChange={(event) => setStoppedAt(event.target.value)}
+            disabled={saving}
+          />
+        </div>
+      </div>
+
+      <p className="mt-2 text-sm text-slate-600">
+        New duration:{" "}
+        <span className="font-semibold tabular-nums text-slate-900">
+          {newDuration === null || newDuration <= 0
+            ? "—"
+            : formatMinutes(newDuration)}
+        </span>
+      </p>
+
+      <div className="mt-2 space-y-1.5">
+        <Label htmlFor={`direct-note-${log.id}`}>Edit note</Label>
+        <textarea
+          id={`direct-note-${log.id}`}
+          value={editNote}
+          onChange={(event) => setEditNote(event.target.value)}
+          rows={2}
+          maxLength={1000}
+          disabled={saving}
+          placeholder="Why the logged time is being changed"
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:bg-slate-50"
+        />
+      </div>
+
+      <div className="mt-3 flex justify-end gap-2">
+        <Button
+          variant="secondary"
+          onClick={onClose}
+          disabled={saving}
+          className="px-3 py-1.5 text-xs"
+        >
+          Cancel
+        </Button>
+        <Button
+          onClick={save}
+          disabled={saving}
+          className="px-3 py-1.5 text-xs"
+        >
+          {saving ? "Saving…" : "Save correction"}
+        </Button>
+      </div>
+    </div>
   );
 }

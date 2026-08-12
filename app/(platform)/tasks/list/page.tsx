@@ -53,6 +53,7 @@ export default async function TaskListPage({
         canBulkEdit={user.role !== Role.BILLER}
         canEditEstimate={user.role !== Role.BILLER}
         canCloseWithoutTimer={user.role !== Role.BILLER}
+        canEditTimeDirectly={user.role !== Role.BILLER}
         currentUserId={user.id}
         initial={{
           assignedToId: searchParams.assignedToId,

@@ -274,6 +274,7 @@ export default async function BatchDetailPage({
         initialTab={initialTab}
         showReassignedTab={isManager}
         reassignedCount={reassignedToMeCount}
+        notActionableCount={stats.notActionableCount}
       />
     </div>
   );

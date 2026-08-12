@@ -39,3 +39,33 @@ export const reviewTimeEditRequestSchema = z.object({
     // A transform pipeline hides that undefined is acceptable.
     .optional(),
 });
+
+/**
+ * A PM or Owner correcting a log outright, with no request and no approval.
+ *
+ * Same shape as a request, but the note is mandatory rather than a reason
+ * offered to a reviewer: with nobody else in the loop, the note *is* the
+ * record of why the number changed.
+ */
+export const directTimeEditSchema = z
+  .object({
+    newStartedAt: dateTimeSchema,
+    newStoppedAt: dateTimeSchema,
+    editNote: z
+      .string()
+      .trim()
+      .min(1, "Say why the time is being changed")
+      .max(1000),
+  })
+  .refine((data) => data.newStoppedAt > data.newStartedAt, {
+    message: "The end time must be after the start time.",
+    path: ["newStoppedAt"],
+  })
+  .refine(
+    (data) =>
+      data.newStoppedAt.getTime() - data.newStartedAt.getTime() >= 60_000,
+    {
+      message: "The corrected time must be at least one minute.",
+      path: ["newStoppedAt"],
+    },
+  );

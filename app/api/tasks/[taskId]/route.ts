@@ -14,6 +14,7 @@ import {
   taskVisibilityFilter,
 } from "@/lib/task-access";
 import { TASK_DETAIL_INCLUDE, toTaskDto } from "@/lib/task-serialize";
+import { autoLinkProductivity } from "@/lib/task/productivity-auto-link";
 import { formatMinutes } from "@/lib/task-timer-serialize";
 import {
   closeSeries,
@@ -213,6 +214,18 @@ export async function PATCH(
   const statusChanged =
     input.status !== undefined && input.status !== existing.status;
 
+  /**
+   * Manual productivity, for the task types that have no module behind them.
+   * The auto-linked types overwrite this below — a typed number competing with
+   * the audit trail is exactly what the auto-link exists to prevent.
+   */
+  if (input.productivityCount !== undefined) {
+    data.productivityCount = input.productivityCount;
+  }
+  if (input.productivityAmount !== undefined) {
+    data.productivityAmount = input.productivityAmount;
+  }
+
   if (input.status !== undefined) {
     data.status = input.status;
 
@@ -222,6 +235,26 @@ export async function PATCH(
         data.completedById = session!.user.id;
         // Time taken is what the timer recorded, not what anyone remembers.
         data.actualMinutes = existing.totalLoggedMinutes;
+
+        /**
+         * For Claim Follow-up and Denial/Rejection Work the count is not a
+         * number anyone types: it is the AR or EOB notes this person wrote
+         * while their timer was running. Counted here, on close, so the figure
+         * is fixed at the moment the work ended rather than drifting with
+         * later activity.
+         *
+         * Attributed to the **assignee**, not whoever pressed close: a PM
+         * closing a biller's task is recording the biller's work.
+         */
+        const linked = await autoLinkProductivity(
+          existing.id,
+          (input.assignedToId ?? existing.assignedToId) as string,
+        );
+
+        if (linked.source !== null) {
+          data.productivityCount = linked.count;
+          data.productivityAmount = linked.amount;
+        }
       }
     } else {
       // Re-opening clears the completion so productivity counts stay honest.

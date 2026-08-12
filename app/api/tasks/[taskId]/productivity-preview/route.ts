@@ -1,13 +1,19 @@
-// ADD-ONLY: time logs are written by the timer and corrected only through an
-// approved edit request. Do not add PUT, PATCH or DELETE here.
 import { NextResponse, type NextRequest } from "next/server";
 import { apiErrorResponse, requireAuth } from "@/lib/api-helpers";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { canEditTask, canManageTaskTime } from "@/lib/task-access";
-import { TIME_LOG_INCLUDE, toTaskTimeLogDto } from "@/lib/task-timer-serialize";
+import { autoLinkProductivity } from "@/lib/task/productivity-auto-link";
 
-/** GET /api/tasks/[taskId]/time-logs — every session worked on this task. */
+/**
+ * GET /api/tasks/[taskId]/productivity-preview
+ *
+ * What the count *would* be if the task were closed now.
+ *
+ * The same function the close runs, called ahead of it, so the number on the
+ * confirmation screen is the number that gets saved rather than a second
+ * estimate of it. It writes nothing.
+ */
 export async function GET(
   _request: NextRequest,
   { params }: { params: { taskId: string } },
@@ -24,7 +30,7 @@ export async function GET(
       assignedToId: true,
       createdById: true,
       practiceId: true,
-      totalLoggedMinutes: true,
+      practice: { select: { name: true } },
     },
   });
 
@@ -32,11 +38,6 @@ export async function GET(
     return apiErrorResponse("Task not found.", 404);
   }
 
-  /**
-   * Either rule opens this list. A PM overseeing the practice may not rewrite
-   * the task, so `canEditTask` excludes them — but they may correct its time,
-   * and they cannot do that without first being able to read it.
-   */
   const allowed =
     canEditTask(session!.user, task) ||
     (await canManageTaskTime(session!.user, task));
@@ -45,14 +46,17 @@ export async function GET(
     return apiErrorResponse("Task not found.", 404);
   }
 
-  const logs = await prisma.taskTimeLog.findMany({
-    where: { taskId: task.id },
-    orderBy: { startedAt: "desc" },
-    include: TIME_LOG_INCLUDE,
-  });
+  // Attributed to the assignee, since closing records their work rather than
+  // the work of whoever pressed the button.
+  const linked = await autoLinkProductivity(task.id, task.assignedToId);
 
   return NextResponse.json({
-    data: logs.map(toTaskTimeLogDto),
-    totalLoggedMinutes: task.totalLoggedMinutes,
+    count: linked.count,
+    amount: linked.amount?.toString() ?? null,
+    source: linked.source,
+    from: linked.from?.toISOString() ?? null,
+    to: linked.to?.toISOString() ?? null,
+    sessionCount: linked.sessionCount,
+    practiceName: task.practice?.name ?? null,
   });
 }

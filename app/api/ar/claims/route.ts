@@ -8,7 +8,10 @@ import {
   zodErrorResponse,
 } from "@/lib/api-helpers";
 import { canAccessBatch } from "@/lib/ar-access";
-import { ACTIONABLE_WHERE, NOT_ACTIONABLE_WHERE } from "@/lib/ar-actionable";
+import {
+  ACTIONABLE_WHERE,
+  NOT_ACTIONABLE_BUCKET,
+} from "@/lib/ar-actionable";
 import { agingBucketFilter } from "@/lib/ar-aging";
 import { manuallyReassignedTo } from "@/lib/ar-reassignment";
 import { CLAIM_INCLUDE, toClaimDto } from "@/lib/ar-serialize";
@@ -74,7 +77,8 @@ export async function GET(request: NextRequest) {
     assignedToIds: searchParams.get("assignedToIds") ?? undefined,
     includeUnassigned: searchParams.get("includeUnassigned") ?? undefined,
     reassignedToMe: searchParams.get("reassignedToMe") ?? undefined,
-    actionable: searchParams.get("actionable") ?? undefined,
+    includeNotActionable:
+      searchParams.get("includeNotActionable") ?? undefined,
   });
 
   if (!query.success) {
@@ -122,6 +126,26 @@ export async function GET(request: NextRequest) {
 
   // Each selected bucket is its own agingDays range; any of them qualifies.
   if (agingBucketRanges.length > 0) anyOf.push({ OR: agingBucketRanges });
+
+  /**
+   * 0–30 day claims are excluded unless something says otherwise.
+   *
+   * Two things can say otherwise, and both mean the same thing — "I know, show
+   * them": the explicit flag, and **selecting the 0–30 aging bucket**. Without
+   * the second, choosing that bucket would return an empty table, which reads
+   * as a broken filter rather than as a rule.
+   *
+   * Pushed into `anyOf` rather than spread into the `where` object, because a
+   * selected bucket already writes a top-level `agingDays` key and the spread
+   * would silently drop one of the two.
+   */
+  const askedForFreshBucket =
+    filters.agingBucket === NOT_ACTIONABLE_BUCKET ||
+    (filters.agingBuckets ?? []).includes(NOT_ACTIONABLE_BUCKET);
+
+  if (filters.includeNotActionable !== "true" && !askedForFreshBucket) {
+    anyOf.push(ACTIONABLE_WHERE);
+  }
 
   // A provider matches on either field, since the column shows either.
   if (filters.providerNames) {
@@ -222,15 +246,6 @@ export async function GET(request: NextRequest) {
       ? { insuranceName: { contains: filters.insuranceName, mode: "insensitive" as const } }
       : {}),
     ...(agingFilter ? { agingDays: agingFilter } : {}),
-    /**
-     * 0–30 day claims stay visible in the batch list by default — a PM needs
-     * the whole book — so this filter only ever narrows, in either direction.
-     */
-    ...(filters.actionable === "only"
-      ? ACTIONABLE_WHERE
-      : filters.actionable === "not-actionable"
-        ? NOT_ACTIONABLE_WHERE
-        : {}),
     ...(filters.overdue === "true"
       ? {
           statusCategory: StatusCategory.RED,

@@ -116,6 +116,38 @@ export async function canAssignTask(
 }
 
 /**
+ * Who may correct the **time** on a task, as opposed to the task itself.
+ *
+ * Wider than `canEditTask` on purpose. A PM overseeing a practice may not
+ * rewrite another person's task — they reassign it instead — but a timer that
+ * ran long over lunch is exactly the thing they are there to fix, and it feeds
+ * the analytics they answer for. Owners reach everything.
+ *
+ * The scope is the same one `taskVisibilityFilter` uses: the task's practice,
+ * or for a task with no practice, whoever holds it.
+ */
+export async function canManageTaskTime(
+  user: { id: string; role: Role },
+  task: { practiceId: string | null; assignedToId: string },
+): Promise<boolean> {
+  if (user.role === Role.OWNER) return true;
+  if (user.role !== Role.PROJECT_MANAGER) return false;
+
+  const practiceIds = await practiceMembershipIds(user.id);
+  if (practiceIds.length === 0) return false;
+
+  if (task.practiceId) return practiceIds.includes(task.practiceId);
+
+  // A general task is placed by who holds it.
+  const shared = await prisma.userPractice.findFirst({
+    where: { userId: task.assignedToId, practiceId: { in: practiceIds } },
+    select: { id: true },
+  });
+
+  return shared !== null;
+}
+
+/**
  * Editing is allowed for the assignee, the creator, or an owner. A PM who
  * merely oversees the practice can see the task but not rewrite someone
  * else's — they reassign it instead.

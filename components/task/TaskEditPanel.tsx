@@ -22,6 +22,17 @@ import { describeRecurrence } from "@/lib/task/recurrence-config";
 import type { TaskDto, TaskNoteDto } from "@/lib/task-serialize";
 import { formatDateTimeIST } from "@/lib/timezone";
 
+/** What `GET /api/tasks/[taskId]/productivity-preview` returns. */
+interface ProductivityPreview {
+  count: number | null;
+  amount: string | null;
+  source: "AR" | "EOB" | null;
+  from: string | null;
+  to: string | null;
+  sessionCount: number;
+  practiceName: string | null;
+}
+
 /**
  * Inline expanded view of one task.
  *
@@ -34,6 +45,7 @@ export function TaskEditPanel({
   currentUserId,
   canEditEstimate = false,
   canCloseWithoutTimer = false,
+  canEditTimeDirectly = false,
   onSaved,
   onClose,
 }: {
@@ -46,6 +58,8 @@ export function TaskEditPanel({
    * the timer requirement does not apply to them.
    */
   canCloseWithoutTimer?: boolean;
+  /** PM/Owner correct a time log outright; billers request an edit. */
+  canEditTimeDirectly?: boolean;
   onSaved: () => void;
   onClose: () => void;
 }) {
@@ -71,6 +85,24 @@ export function TaskEditPanel({
 
   // What "how much got done" means here depends on the task's type.
   const productivity = productivityConfigFor(task.taskTypeName);
+
+  /**
+   * What the auto-linked count will be, fetched before the close rather than
+   * discovered after it. Null until asked for; once shown, the save button
+   * becomes a confirmation.
+   */
+  const [preview, setPreview] = useState<ProductivityPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  const needsPreview =
+    Boolean(productivity?.autoSourceModule) &&
+    status === TaskStatus.CLOSED &&
+    task.status !== TaskStatus.CLOSED;
+
+  // A changed status invalidates a preview taken against the old one.
+  useEffect(() => {
+    if (!needsPreview) setPreview(null);
+  }, [needsPreview]);
 
   const [notes, setNotes] = useState<TaskNoteDto[]>(task.notes ?? []);
   const [newNote, setNewNote] = useState("");
@@ -107,6 +139,43 @@ export function TaskEditPanel({
     ) {
       setError("You must log time with the timer before closing this task");
       return;
+    }
+
+    /**
+     * For the auto-counted types the biller sees what will be recorded before
+     * it is recorded. The count comes from their own timer sessions, so it is
+     * a consequence of how they worked rather than something they choose —
+     * being shown it first is the difference between a measurement and a
+     * surprise.
+     */
+    if (needsPreview && preview === null) {
+      setPreviewing(true);
+
+      try {
+        const response = await fetch(
+          `/api/tasks/${task.id}/productivity-preview`,
+        );
+
+        if (response.ok) {
+          setPreview(await response.json());
+          return;
+        }
+
+        // A failed preview must not block the close; the server counts again
+        // on save regardless.
+        setPreview({
+          count: null,
+          amount: null,
+          source: null,
+          from: null,
+          to: null,
+          sessionCount: 0,
+          practiceName: null,
+        });
+        return;
+      } finally {
+        setPreviewing(false);
+      }
     }
 
     setBusy(true);
@@ -281,6 +350,7 @@ export function TaskEditPanel({
           <TaskTimerPanel
             task={task}
             currentUserId={currentUserId}
+            canEditTimeDirectly={canEditTimeDirectly}
             onChanged={onSaved}
           />
 
@@ -291,10 +361,65 @@ export function TaskEditPanel({
               </p>
 
               {productivity.autoSourceModule ? (
-                <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900 ring-1 ring-inset ring-sky-200">
-                  {AUTO_SOURCE_NOTE[productivity.autoSourceModule]} — no manual
-                  entry needed.
-                </p>
+                <>
+                  <p className="rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-900 ring-1 ring-inset ring-sky-200">
+                    {AUTO_SOURCE_NOTE[productivity.autoSourceModule]} — no
+                    manual entry needed.
+                  </p>
+
+                  {/*
+                    What closing will record, shown before it is recorded. Zero
+                    is amber rather than an error: working off the clock is a
+                    reason to check, not something to be blocked over.
+                  */}
+                  {preview ? (
+                    <div
+                      className={`rounded-lg px-3 py-2 text-xs ring-1 ring-inset ${
+                        preview.count === 0
+                          ? "bg-amber-50 text-amber-900 ring-amber-200"
+                          : "bg-slate-50 text-slate-700 ring-slate-200"
+                      }`}
+                    >
+                      {preview.count === 0 ? (
+                        <p className="font-medium">
+                          No{" "}
+                          {preview.source === "EOB" ? "EOB" : "AR"} work was
+                          found during your timer sessions
+                          {preview.practiceName
+                            ? ` for ${preview.practiceName}`
+                            : ""}
+                          . Close anyway and the productivity count will be 0.
+                        </p>
+                      ) : (
+                        <p className="font-medium">
+                          Based on your timer sessions, we found{" "}
+                          {preview.count}{" "}
+                          {preview.source === "EOB"
+                            ? "denials worked"
+                            : "claims worked"}
+                          {preview.amount && preview.source === "EOB"
+                            ? ` · ${formatUSD(preview.amount)} denied`
+                            : ""}
+                          .
+                        </p>
+                      )}
+
+                      {preview.from && preview.to ? (
+                        <p className="mt-1 text-slate-500">
+                          Counted work logged between{" "}
+                          {formatDateTimeIST(preview.from)} and{" "}
+                          {formatDateTimeIST(preview.to)} (
+                          {preview.sessionCount} session
+                          {preview.sessionCount === 1 ? "" : "s"}).
+                        </p>
+                      ) : (
+                        <p className="mt-1 text-slate-500">
+                          No stopped timer sessions on this task.
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2">
                   {productivity.showCount ? (
@@ -418,8 +543,14 @@ export function TaskEditPanel({
           </div>
 
           <div className="flex gap-2">
-            <Button onClick={saveStatus} disabled={busy}>
-              {busy ? "Saving…" : "Save"}
+            <Button onClick={saveStatus} disabled={busy || previewing}>
+              {busy
+                ? "Saving…"
+                : previewing
+                  ? "Checking…"
+                  : preview
+                    ? "Confirm and close"
+                    : "Save"}
             </Button>
             <Button variant="secondary" onClick={onClose} disabled={busy}>
               Close

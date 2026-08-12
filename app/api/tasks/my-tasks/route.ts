@@ -39,6 +39,18 @@ export async function GET(request: NextRequest) {
   const overdue = searchParams.get("overdue") === "true";
   const dueToday = searchParams.get("dueToday") === "true";
 
+  /**
+   * The queue is outstanding work by default, but a biller has a legitimate
+   * reason to look at what they finished — checking a timer, or answering
+   * "did I do that one". Asking for a status returns it; asking for nothing
+   * still returns only what is still on their plate.
+   */
+  const requestedStatus = searchParams.get("status");
+  const status =
+    requestedStatus && requestedStatus in TaskStatus
+      ? (requestedStatus as TaskStatus)
+      : undefined;
+
   const today = dayStart();
 
   const range =
@@ -60,13 +72,14 @@ export async function GET(request: NextRequest) {
       ? { lte: dayEnd(today) }
       : undefined;
 
-  // This queue is outstanding work by definition, so a closed task is already
-  // excluded and both quick filters only narrow the due date.
+  // Both quick filters only narrow the due date.
   const dueDate = quickRange ?? range;
 
   const where = {
     assignedToId: session!.user.id,
-    status: { in: [TaskStatus.OPEN, TaskStatus.IN_PROCESS, TaskStatus.HOLD] },
+    status: status
+      ? { equals: status }
+      : { in: [TaskStatus.OPEN, TaskStatus.IN_PROCESS, TaskStatus.HOLD] },
     // A recurring parent is a schedule, not work — its instances are what
     // land on someone's plate.
     isRecurring: false,
@@ -76,11 +89,16 @@ export async function GET(request: NextRequest) {
   const [tasks, total] = await Promise.all([
     prisma.task.findMany({
       where,
-      orderBy: [
-        { dueDate: { sort: "asc", nulls: "last" } },
-        { priority: "asc" },
-        { createdAt: "asc" },
-      ],
+      orderBy:
+        status === TaskStatus.CLOSED
+          ? // Finished work reads as a log — most recently closed first. Due
+            // date is the wrong axis once the thing is done.
+            [{ completedAt: { sort: "desc", nulls: "last" } }]
+          : [
+              { dueDate: { sort: "asc", nulls: "last" } },
+              { priority: "asc" },
+              { createdAt: "asc" },
+            ],
       skip: pagination.skip,
       take: pagination.take,
       include: TASK_INCLUDE,

@@ -106,6 +106,7 @@ export function TaskListClient({
   canBulkEdit,
   canEditEstimate,
   canCloseWithoutTimer,
+  canEditTimeDirectly,
   currentUserId,
   initial,
 }: {
@@ -116,6 +117,8 @@ export function TaskListClient({
   /** The estimate is the yardstick, so only PM/Owner may move it. */
   canEditEstimate: boolean;
   canCloseWithoutTimer: boolean;
+  /** PM/Owner correct a time log outright; billers request an edit. */
+  canEditTimeDirectly: boolean;
   currentUserId: string;
   initial: {
     assignedToId?: string;
@@ -433,7 +436,12 @@ export function TaskListClient({
           className="w-auto min-w-[140px]"
           aria-label="Status"
         >
-          <option value="">All statuses</option>
+          {/*
+            The default excludes closed work, so the empty option says what it
+            actually shows. Choosing "Closed" is how anyone — biller included
+            — reviews what has been finished.
+          */}
+          <option value="">Open, in process &amp; hold</option>
           {Object.values(TaskStatus).map((value) => (
             <option key={value} value={value}>
               {STATUS_LABELS[value]}
@@ -883,6 +891,7 @@ export function TaskListClient({
                             currentUserId={currentUserId}
                             canEditEstimate={canEditEstimate}
                             canCloseWithoutTimer={canCloseWithoutTimer}
+                            canEditTimeDirectly={canEditTimeDirectly}
                             onSaved={load}
                             onClose={() => setExpandedId(null)}
                           />

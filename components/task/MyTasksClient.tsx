@@ -56,6 +56,7 @@ export function MyTasksClient({
   taskTypes,
   canEditEstimate,
   canCloseWithoutTimer,
+  canEditTimeDirectly,
   currentUserId,
 }: {
   practices: { id: string; name: string }[];
@@ -64,6 +65,8 @@ export function MyTasksClient({
   /** The estimate is the yardstick, so only PM/Owner may move it. */
   canEditEstimate: boolean;
   canCloseWithoutTimer: boolean;
+  /** PM/Owner correct a time log outright; billers request an edit. */
+  canEditTimeDirectly: boolean;
   currentUserId: string;
 }) {
   const [tasks, setTasks] = useState<TaskDto[]>([]);
@@ -88,6 +91,14 @@ export function MyTasksClient({
         ...dueDateParams(dueQuick, dueFrom, dueTo),
       });
 
+      /**
+       * The status goes to the API rather than being applied to the rows it
+       * returns. The queue only fetches outstanding work, so filtering a
+       * closed status client-side matched nothing however many closed tasks
+       * the person actually had.
+       */
+      if (statusFilter) params.set("status", statusFilter);
+
       // my-tasks also releases anything whose hold expired.
       const response = await fetch(`/api/tasks/my-tasks?${params.toString()}`);
       if (response.ok) {
@@ -97,7 +108,7 @@ export function MyTasksClient({
     } finally {
       setLoading(false);
     }
-  }, [dueQuick, dueFrom, dueTo]);
+  }, [dueQuick, dueFrom, dueTo, statusFilter]);
 
   useEffect(() => {
     load();
@@ -123,24 +134,32 @@ export function MyTasksClient({
 
   const visible = useMemo(
     () =>
+      // Status is already applied by the query above; the rest narrow rows
+      // that are all in hand.
       tasks.filter(
         (task) =>
-          (statusFilter === "" || task.status === statusFilter) &&
           (priorityFilter === "" || task.priority === priorityFilter) &&
           (practiceFilter === "" || task.practiceId === practiceFilter) &&
           (typeFilter === "" || task.taskTypeId === typeFilter),
       ),
-    [tasks, statusFilter, priorityFilter, practiceFilter, typeFilter],
+    [tasks, priorityFilter, practiceFilter, typeFilter],
   );
 
   return (
     <div>
-      <div className="mb-4 grid gap-3 sm:grid-cols-4">
-        <Summary label="Open" count={counts.open} tone="sky" />
-        <Summary label="In process" count={counts.inProcess} tone="brand" />
-        <Summary label="On hold" count={counts.hold} tone="amber" />
-        <Summary label="Overdue" count={counts.overdue} tone="red" />
-      </div>
+      {/*
+        These count the outstanding queue. With a status filter applied the
+        fetched set is no longer that queue, so they would read as four zeros
+        beside a full table — worse than not being there.
+      */}
+      {statusFilter === "" ? (
+        <div className="mb-4 grid gap-3 sm:grid-cols-4">
+          <Summary label="Open" count={counts.open} tone="sky" />
+          <Summary label="In process" count={counts.inProcess} tone="brand" />
+          <Summary label="On hold" count={counts.hold} tone="amber" />
+          <Summary label="Overdue" count={counts.overdue} tone="red" />
+        </div>
+      ) : null}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Select
@@ -149,7 +168,11 @@ export function MyTasksClient({
           className="w-auto min-w-[140px]"
           aria-label="Status"
         >
-          <option value="">All statuses</option>
+          {/*
+            The default is outstanding work, so the empty option says so
+            rather than claiming to show everything.
+          */}
+          <option value="">Open, in process &amp; hold</option>
           {Object.values(TaskStatus).map((status) => (
             <option key={status} value={status}>
               {STATUS_LABELS[status]}
@@ -301,6 +324,7 @@ export function MyTasksClient({
                     currentUserId={currentUserId}
                     canEditEstimate={canEditEstimate}
                     canCloseWithoutTimer={canCloseWithoutTimer}
+                            canEditTimeDirectly={canEditTimeDirectly}
                     onSaved={load}
                     onClose={() => setExpandedId(null)}
                   />

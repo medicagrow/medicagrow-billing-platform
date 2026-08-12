@@ -77,8 +77,8 @@ const FILTER_DEFAULTS = {
   aging: [] as string[],
   provider: [] as string[],
   assignedTo: [] as string[],
-  /** "" all · "only" 31+ days · "not-actionable" the 0–30 day bucket alone. */
-  actionable: "",
+  /** Brings the 0–30 day bucket back into a list that excludes it. */
+  includeNotActionable: false,
   visitStatus: "",
   dosFrom: "",
   dosTo: "",
@@ -100,6 +100,7 @@ export function BatchClaimsPanel({
   initialTab = "all",
   showReassignedTab = false,
   reassignedCount = 0,
+  notActionableCount = 0,
 }: {
   batchId: string;
   canAssign: boolean;
@@ -123,6 +124,8 @@ export function BatchClaimsPanel({
    */
   showReassignedTab?: boolean;
   reassignedCount?: number;
+  /** How many claims the default exclusion is holding back, for the hint. */
+  notActionableCount?: number;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -231,7 +234,9 @@ export function BatchClaimsPanel({
     }
     if (people.length > 0) params.set("assignedToIds", people.join(","));
 
-    if (filters.actionable) params.set("actionable", filters.actionable);
+    if (filters.includeNotActionable) {
+      params.set("includeNotActionable", "true");
+    }
     if (filters.visitStatus) params.set("visitStatus", filters.visitStatus);
     if (filters.dosFrom) params.set("dosFrom", filters.dosFrom);
     if (filters.dosTo) params.set("dosTo", filters.dosTo);
@@ -249,7 +254,7 @@ export function BatchClaimsPanel({
     filters.aging,
     filters.provider,
     filters.assignedTo,
-    filters.actionable,
+    filters.includeNotActionable,
     filters.visitStatus,
     filters.dosFrom,
     filters.dosTo,
@@ -543,23 +548,28 @@ export function BatchClaimsPanel({
         ) : null}
 
         {/*
-          0–30 day claims stay in the list by default — a PM needs the whole
-          book — so this narrows in either direction rather than hiding them.
+          The list excludes 0–30 day claims by default: it is a work queue
+          first, and a freshly uploaded batch is mostly claims nobody may act
+          on yet. Selecting the 0–30 aging bucket above is the other way to
+          see them — asking for that bucket already says you want it.
         */}
-        <Select
-          value={filters.actionable}
-          onChange={(event) => setFilters({ actionable: event.target.value })}
-          aria-label="Actionable claims"
-          className="w-auto min-w-[190px]"
+        <label
+          className="flex items-center gap-1.5 text-xs text-slate-600"
+          title={`Claims aged ${NOT_ACTIONABLE_MAX_DAYS} days or less are hidden by default — insurance has not had time to process them.`}
         >
-          <option value="">All ages</option>
-          <option value="only">
-            Actionable only ({NOT_ACTIONABLE_MAX_DAYS + 1}+ days)
-          </option>
-          <option value="not-actionable">
-            0–{NOT_ACTIONABLE_MAX_DAYS} day claims only
-          </option>
-        </Select>
+          <input
+            type="checkbox"
+            checked={filters.includeNotActionable}
+            onChange={(event) =>
+              setFilters({ includeNotActionable: event.target.checked })
+            }
+            className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-600"
+          />
+          Include 0–{NOT_ACTIONABLE_MAX_DAYS} day claims
+          {notActionableCount > 0 && !filters.includeNotActionable ? (
+            <span className="text-slate-400">({notActionableCount} hidden)</span>
+          ) : null}
+        </label>
 
         <div className="flex items-center gap-1.5">
           <label htmlFor="dosFrom" className="text-xs text-slate-500">
