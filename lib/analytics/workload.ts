@@ -31,7 +31,22 @@ import { dayStart } from "@/lib/todo/access";
  * plan at all.
  */
 
-export type WorkloadItemKind = "assigned" | "ar" | "projected";
+/**
+ * `ar-unconfigured` is an AR project with no `dailyHours`.
+ *
+ * It used to be counted nowhere: excluded from the assigned bucket because of
+ * its type, and skipped by the AR bucket for want of a rate. Fifty-seven live
+ * tasks fell through that gap, some of them thirty-hour projects, and the grid
+ * quietly reported those billers as free. It now falls back to the behaviour
+ * every other task type has — the whole estimate on the due date — so the day
+ * is never understated, and carries its own kind so the cell can say the
+ * number is a placeholder rather than a plan.
+ */
+export type WorkloadItemKind =
+  | "assigned"
+  | "ar"
+  | "ar-unconfigured"
+  | "projected";
 
 export interface WorkloadItem {
   label: string;
@@ -60,9 +75,20 @@ export interface WorkloadDay {
   actualMinutes: number;
   /** Claim Follow-up daily rates active on this day. */
   arMinutes: number;
+  /** AR estimates placed on their due date for want of a daily rate. */
+  arUnconfiguredMinutes: number;
   /** Recurring occurrences that do not exist yet. */
   projectedMinutes: number;
   totalMinutes: number;
+  /**
+   * What is left of the target after everything above — the number a PM is
+   * actually looking for when they ask who can take a batch.
+   *
+   * Floored at zero: an over-committed day has no negative capacity to lend
+   * to another one.
+   */
+  freeMinutes: number;
+  freeHours: number;
   isOverCapacity: boolean;
   isUnderAssigned: boolean;
   /** Weekends carry no target, so they are neither over nor under. */
@@ -243,6 +269,9 @@ export async function getWorkloadData(params: {
         startDate: true,
         dueDate: true,
         dailyHours: true,
+        // Only used by the unconfigured fallback, which places the whole
+        // estimate on the due date.
+        estimatedMinutes: true,
         createdAt: true,
         assignedToId: true,
         practiceId: true,
@@ -291,8 +320,11 @@ export async function getWorkloadData(params: {
         date,
         actualMinutes: 0,
         arMinutes: 0,
+        arUnconfiguredMinutes: 0,
         projectedMinutes: 0,
         totalMinutes: 0,
+        freeMinutes: 0,
+        freeHours: 0,
         isOverCapacity: false,
         isUnderAssigned: false,
         isWeekend: isWeekend(new Date(`${date}T00:00:00.000Z`)),
@@ -361,7 +393,6 @@ export async function getWorkloadData(params: {
     const isOtherPm = !managedByViewer(task.practiceId);
 
     if (hours === null) {
-      // Unconfigured: counted nowhere, reported everywhere.
       unconfigured.get(task.assignedToId)?.push({
         taskId: task.id,
         label: getTaskLabel(task),
@@ -370,6 +401,36 @@ export async function getWorkloadData(params: {
         dueDate: task.dueDate?.toISOString() ?? null,
         canConfigure: !isOtherPm,
       });
+
+      /**
+       * Fall back to what every other task type does: the whole estimate on
+       * the due date. It is the wrong *shape* — a month of chasing is not a
+       * thing that happens on the 31st — but it is the right total, and a
+       * wrong shape is recoverable where a missing thirty hours is not.
+       */
+      const date = task.dueDate ? toIsoDate(task.dueDate) : null;
+      if (!date || date < today) continue;
+
+      const day = dayFor(task.assignedToId, date);
+      if (!day) continue;
+
+      const minutes = task.estimatedMinutes ?? 0;
+
+      day.arUnconfiguredMinutes += minutes;
+      day.items.push({
+        label: `⚠ AR — ${task.practice?.name ?? "No practice"}${
+          isOtherPm ? " (other PM)" : ""
+        }`,
+        practiceName: task.practice?.name ?? null,
+        minutes,
+        kind: "ar-unconfigured",
+        isProjected: false,
+        isOtherPm,
+        taskId: task.id,
+        startDate: (task.startDate ?? task.createdAt).toISOString(),
+        dueDate: task.dueDate?.toISOString() ?? null,
+      });
+
       continue;
     }
 
@@ -422,7 +483,21 @@ export async function getWorkloadData(params: {
       const day = dayFor(biller.id, date)!;
 
       day.totalMinutes =
-        day.actualMinutes + day.arMinutes + day.projectedMinutes;
+        day.actualMinutes +
+        day.arMinutes +
+        day.arUnconfiguredMinutes +
+        day.projectedMinutes;
+
+      /**
+       * Free time is a working-day idea. A weekend has no target, so it has
+       * no spare capacity either — reporting 7.5 free hours every Saturday
+       * would put a fortnight's phantom capacity in the summary.
+       */
+      day.freeMinutes = day.isWeekend
+        ? 0
+        : Math.max(0, targetMinutesPerDay - day.totalMinutes);
+
+      day.freeHours = Math.round((day.freeMinutes / 60) * 10) / 10;
 
       // A weekend has no target, so it is neither short nor over.
       if (!day.isWeekend) {
@@ -505,16 +580,14 @@ export async function getWorkloadData(params: {
   const futureWorking = (biller: WorkloadBiller) =>
     biller.days.filter((day) => day.isFuture && !day.isWeekend);
 
-  const unassignedMinutes = rows.reduce((sum, biller) => {
-    return (
+  // The card is the sum of the same per-day figure the cells show, so the
+  // two cannot disagree about what "free" means.
+  const unassignedMinutes = rows.reduce(
+    (sum, biller) =>
       sum +
-      futureWorking(biller).reduce(
-        (dayed, day) =>
-          dayed + Math.max(0, targetMinutesPerDay - day.totalMinutes),
-        0,
-      )
-    );
-  }, 0);
+      futureWorking(biller).reduce((dayed, day) => dayed + day.freeMinutes, 0),
+    0,
+  );
 
   return {
     dates,

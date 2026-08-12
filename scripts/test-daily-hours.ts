@@ -8,8 +8,9 @@
  *  1. one AR project spreads its rate across the working days of its range;
  *  2. two **sequential** projects do not overlap;
  *  3. two **simultaneous** projects add up on each day;
- *  4. an AR project with no daily hours is counted **nowhere** and reported as
- *     unconfigured — the case that used to make a full biller look free;
+ *  4. an AR project with no daily hours falls back to its due date and is
+ *     reported as unconfigured — it used to be counted nowhere at all, which
+ *     made a fully committed biller look free;
  *  5. a non-AR task still lands on its due date alone.
  *
  * Creates ZZ-prefixed rows and removes them at the end. It never touches real
@@ -360,11 +361,13 @@ async function main() {
     arItems.map((item) => item.label).join(" | "),
   );
 
-  console.log("\n=== 4. an unconfigured AR task is counted nowhere ===");
+  console.log(
+    "\n=== 4. an unconfigured AR task falls back to its due date ===",
+  );
 
   await prisma.task.update({
     where: { id: overlapping.id },
-    data: { dailyHours: null },
+    data: { dailyHours: null, estimatedMinutes: 300 },
   });
 
   result = await planner();
@@ -374,12 +377,37 @@ async function main() {
   );
 
   check(
-    "its hours drop out of the grid entirely",
+    "its daily rate leaves the AR bucket",
     afterClearing.every((entry) => entry.arMinutes === 120),
     afterClearing.map((entry) => entry.arMinutes).join(","),
   );
+
+  const dueDayCell = result.billers[0]!.days.find(
+    (entry) => entry.date === iso(day(6)),
+  );
+
   check(
-    "and it is reported as unconfigured instead",
+    "but the whole estimate lands on the due date rather than vanishing",
+    dueDayCell?.arUnconfiguredMinutes === 300,
+    `${dueDayCell?.arUnconfiguredMinutes} min on ${iso(day(6))}`,
+  );
+  check(
+    "and it counts towards that day's total",
+    (dueDayCell?.totalMinutes ?? 0) >= 300,
+    `${dueDayCell?.totalMinutes} total`,
+  );
+  check(
+    "carrying its own kind, so the cell can flag it",
+    dueDayCell?.items.some((item) => item.kind === "ar-unconfigured") === true,
+  );
+  check(
+    "no other day picks it up",
+    result.billers[0]!.days
+      .filter((entry) => entry.date !== iso(day(6)))
+      .every((entry) => entry.arUnconfiguredMinutes === 0),
+  );
+  check(
+    "and it is still reported as unconfigured",
     result.billers[0]!.unconfiguredAr.length === 1,
     String(result.billers[0]!.unconfiguredAr.length),
   );
@@ -392,6 +420,60 @@ async function main() {
     "an unconfigured task on another PM's practice cannot be configured here",
     result.billers[0]!.unconfiguredAr[0]?.canConfigure === false,
   );
+
+  console.log("\n=== free hours ===");
+
+  const workingDay = result.billers[0]!.days.find(
+    (entry) => !entry.isWeekend && entry.date <= iso(day(4)),
+  )!;
+
+  check(
+    "free minutes are the target less everything committed",
+    workingDay.freeMinutes ===
+      Math.max(0, result.targetMinutesPerDay - workingDay.totalMinutes),
+    `${workingDay.freeMinutes} = ${result.targetMinutesPerDay} - ${workingDay.totalMinutes}`,
+  );
+  check(
+    "free hours are the same figure, in hours",
+    workingDay.freeHours === Math.round((workingDay.freeMinutes / 60) * 10) / 10,
+    String(workingDay.freeHours),
+  );
+  check(
+    "a day with 2h of AR against a 8h target has 6h free",
+    workingDay.freeHours === 6,
+    `${workingDay.freeHours}h free of ${result.targetMinutesPerDay / 60}h`,
+  );
+
+  const weekendDay = result.billers[0]!.days.find((entry) => entry.isWeekend)!;
+
+  check(
+    "a weekend has no free capacity to offer",
+    weekendDay.freeMinutes === 0,
+    "no target, so no spare",
+  );
+
+  // Deliberately more than a whole day, on a day known to be a weekday.
+  const overCommitted = await makeTask({
+    label: "overload",
+    taskTypeId: reportType.id,
+    practiceId: practiceA.id,
+    dueDate: new Date(`${workingDay.date}T00:00:00.000Z`),
+    estimatedMinutes: 900,
+  });
+
+  result = await planner();
+
+  const stuffed = result.billers[0]!.days.find(
+    (entry) => entry.date === workingDay.date,
+  );
+
+  check(
+    "an over-capacity day reports no free time rather than a negative",
+    stuffed?.freeMinutes === 0 && (stuffed?.totalMinutes ?? 0) > 480,
+    `${stuffed?.totalMinutes} min committed against ${result.targetMinutesPerDay}`,
+  );
+
+  await prisma.task.delete({ where: { id: overCommitted.id } });
 
   console.log("\n=== 5. a non-AR task still lands on its due date ===");
 
@@ -416,9 +498,11 @@ async function main() {
   );
   check(
     "and nowhere else",
+    // By kind rather than by total: the day also carries AR, and another day
+    // now carries an unconfigured AR fallback, so a bare total proves nothing.
     result.billers[0]!.days
       .filter((entry) => entry.date !== iso(day(3)))
-      .every((entry) => entry.totalMinutes === entry.arMinutes),
+      .every((entry) => entry.actualMinutes === 0),
   );
 
   // Cleanup. Tasks first, then the practices they hang off.

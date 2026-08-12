@@ -34,28 +34,74 @@ function Key({ className, label }: { className: string; label: string }) {
   );
 }
 
-function tooltipFor(day: WorkloadDay): string {
-  if (day.items.length === 0) return `${day.date}: nothing assigned`;
+const hours = (minutes: number) =>
+  `${Math.round((minutes / 60) * 10) / 10}h`;
 
-  const lines = day.items.slice(0, 8).map((item) => {
-    // An AR block is a rate over a range, so its tooltip gives the whole
-    // shape of the commitment rather than just today's share of it.
-    if (item.kind === "ar") {
-      return `AR Follow-up — ${item.practiceName ?? "No practice"} — ${
-        item.dailyHours ?? 0
-      }h/day — ${(item.startDate ?? "").slice(0, 10)} to ${(
-        item.dueDate ?? ""
-      ).slice(0, 10)}${item.isOtherPm ? " (other PM)" : ""}`;
-    }
+/**
+ * The cell's tooltip: a breakdown, not a list.
+ *
+ * Grouped by kind and led by the totals, because the question in front of the
+ * person hovering is "can this biller take more" — which the individual tasks
+ * only answer once they have been added up.
+ */
+function tooltipFor(day: WorkloadDay, billerName: string, target: number) {
+  const head = `${day.date} — ${billerName}`;
 
-    return `${item.label}${
-      item.practiceName ? ` · ${item.practiceName}` : ""
-    } — ${formatMinutes(item.minutes)}${item.isProjected ? " (proj)" : ""}`;
-  });
+  if (day.isWeekend) return `${head}\nWeekend`;
+  if (day.items.length === 0) {
+    return `${head}\nNothing assigned\nFree: ${hours(day.freeMinutes)} of ${hours(target)} target`;
+  }
 
-  if (day.items.length > 8) lines.push(`+${day.items.length - 8} more`);
+  const lines: string[] = [head];
 
-  return `${day.date}\n${lines.join("\n")}`;
+  const named = (kind: WorkloadItem["kind"]) =>
+    day.items
+      .filter((item) => item.kind === kind)
+      .map(
+        (item) =>
+          `${item.practiceName ?? item.label} ${hours(item.minutes)}` +
+          (item.isOtherPm ? " (other PM)" : ""),
+      )
+      .join(", ");
+
+  if (day.actualMinutes > 0) {
+    lines.push(
+      `Non-AR tasks: ${hours(day.actualMinutes)} (${named("assigned")})`,
+    );
+  }
+
+  if (day.arMinutes > 0) {
+    lines.push(`AR committed: ${hours(day.arMinutes)} (${named("ar")})`);
+  }
+
+  if (day.arUnconfiguredMinutes > 0) {
+    lines.push(
+      `⚠ AR (unconfigured): ${hours(day.arUnconfiguredMinutes)} (${named(
+        "ar-unconfigured",
+      )} — needs daily hours set)`,
+    );
+  }
+
+  if (day.projectedMinutes > 0) {
+    lines.push(
+      `Projected: ${hours(day.projectedMinutes)} (${named("projected")})`,
+    );
+  }
+
+  lines.push(
+    day.freeMinutes > 0
+      ? `Free hours: ${hours(day.freeMinutes)} available for AR`
+      : "Free hours: none",
+  );
+
+  lines.push(
+    `Total: ${hours(day.totalMinutes)} of ${hours(target)} target` +
+      (day.arUnconfiguredMinutes > 0
+        ? " — configure the AR task for accurate planning"
+        : ""),
+  );
+
+  return lines.join("\n");
 }
 
 /**
@@ -70,6 +116,10 @@ function segmentTone(item: WorkloadItem, day: WorkloadDay): string {
     return item.isOtherPm ? "bg-teal-200" : "bg-teal-500";
   }
 
+  // Amber, not teal: this one is a placeholder standing in for a plan, and it
+  // should look like something waiting to be dealt with.
+  if (item.kind === "ar-unconfigured") return "bg-amber-400";
+
   if (item.kind === "projected") return "bg-slate-400";
 
   return day.isOverCapacity ? "bg-red-500" : "bg-emerald-500";
@@ -81,38 +131,39 @@ function segmentTone(item: WorkloadItem, day: WorkloadDay): string {
  * A biller's day is rarely one thing: two practices' AR plus a charge-posting
  * task is three commitments, and a flat green square hides which of them to
  * move when the day is full. Each segment's height is its share of the target
- * day, so the cell reads as "how full, and with what".
+ * day, and **what is left over is drawn too** — spare capacity is the thing a
+ * planner is usually being read for, and an empty-looking square is not the
+ * same as one that says "three hours free".
  */
-function DayCell({ day, target }: { day: WorkloadDay; target: number }) {
+function DayCell({
+  day,
+  target,
+  billerName,
+}: {
+  day: WorkloadDay;
+  target: number;
+  billerName: string;
+}) {
   if (day.isWeekend) {
     return (
-      <div className="mx-auto h-9 w-9 rounded bg-slate-50 ring-1 ring-inset ring-slate-200" />
+      <div className="mx-auto h-9 w-9 rounded bg-slate-100 ring-1 ring-inset ring-slate-200" />
     );
   }
 
-  if (day.items.length === 0) {
-    return (
-      <div
-        title={tooltipFor(day)}
-        className="mx-auto h-9 w-9 rounded bg-white ring-1 ring-inset ring-slate-200"
-      />
-    );
-  }
-
-  // A stable order, so a cell does not reshuffle between loads.
+  // A stable order, so a cell does not reshuffle between loads. Free time is
+  // the last thing added, so it sits on top of what is committed.
   const order: Record<WorkloadItem["kind"], number> = {
-    ar: 0,
-    assigned: 1,
-    projected: 2,
+    assigned: 0,
+    ar: 1,
+    "ar-unconfigured": 2,
+    projected: 3,
   };
 
-  const segments = [...day.items].sort(
-    (a, b) => order[a.kind] - order[b.kind],
-  );
+  const segments = [...day.items].sort((a, b) => order[a.kind] - order[b.kind]);
 
   return (
     <div
-      title={tooltipFor(day)}
+      title={tooltipFor(day, billerName, target)}
       className={`relative mx-auto flex h-9 w-9 flex-col-reverse overflow-hidden rounded ring-1 ring-inset ${
         day.isOverCapacity ? "ring-2 ring-red-500" : "ring-slate-200"
       }`}
@@ -140,7 +191,21 @@ function DayCell({ day, target }: { day: WorkloadDay; target: number }) {
         </span>
       ))}
 
-      <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] font-semibold text-white mix-blend-luminosity">
+      {/* Whatever is left of the target, drawn rather than left blank. */}
+      {day.freeMinutes > 0 ? (
+        <span
+          className="w-full bg-sky-100"
+          style={{ height: `${(day.freeMinutes / target) * 100}%` }}
+        />
+      ) : null}
+
+      <span
+        className={`pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] font-semibold ${
+          day.totalMinutes === 0
+            ? "text-sky-700"
+            : "text-white mix-blend-luminosity"
+        }`}
+      >
         {Math.round(day.totalMinutes / 60)}
       </span>
     </div>
@@ -247,11 +312,13 @@ export function WorkloadClient({
           </p>
 
           <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
-            <Key className="bg-teal-500" label="AR follow-up" />
-            <Key className="bg-teal-200" label="AR — another PM's practice" />
             <Key className="bg-emerald-500" label="Assigned task" />
-            <Key className="bg-red-500" label="Over capacity" />
+            <Key className="bg-teal-500" label="AR committed" />
+            <Key className="bg-teal-200" label="AR — another PM's practice" />
+            <Key className="bg-amber-400" label="AR — daily hours not set" />
             <Key className="bg-slate-400" label="Projected (recurring)" />
+            <Key className="bg-sky-100" label="Free" />
+            <Key className="bg-red-500" label="Over capacity" />
           </div>
         </div>
 
@@ -295,7 +362,11 @@ export function WorkloadClient({
                     </td>
                     {biller.days.map((day) => (
                       <td key={day.date} className="px-1 py-2">
-                        <DayCell day={day} target={target} />
+                        <DayCell
+                          day={day}
+                          target={target}
+                          billerName={biller.name}
+                        />
                       </td>
                     ))}
                     <td className="px-4 py-2 text-right tabular-nums text-slate-700">

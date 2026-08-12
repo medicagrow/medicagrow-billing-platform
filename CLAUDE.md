@@ -639,10 +639,18 @@ Prisma so the task form and the planner read the same ones.
   up on each day rather than hiding behind each other.
 - An unset `startDate` falls back to the task's `createdAt`, not the epoch:
   assigned work is being done from the moment it lands.
-- **`dailyHours: null` on a Claim Follow-up means unconfigured, not zero.** It
-  is counted nowhere and reported separately — as a summary card, a panel under
-  the grid, and an alert. Counting it as zero would make a fully committed
-  biller look free, which is the failure this whole model exists to prevent.
+- **`dailyHours: null` falls back to the whole estimate on the due date**, as
+  `kind: "ar-unconfigured"`, drawn amber. It is the wrong *shape* — a month of
+  chasing is not a thing that happens on the 31st — but the right total, and a
+  wrong shape is recoverable where a missing thirty hours is not.
+  - This shipped broken: for one session such tasks were counted **nowhere**,
+    because the assigned bucket excludes them by type and the AR bucket skipped
+    them for want of a rate. Fifty-seven live tasks fell through, 80 hours of
+    them inside a fortnight, and the grid reported those billers as free. If
+    you add a bucket to this function, check what happens to the rows that
+    match its type but not its condition.
+  - They are still reported separately — summary card, panel under the grid,
+    and an alert — because the fallback is a placeholder, not a plan.
 - The form shows both fields for that task type alone; the edit modal warns
   when an existing AR task has no daily hours.
 - The AR query in `getWorkloadData()` matches on **range overlap**
@@ -678,9 +686,36 @@ than typed.
 assign control and a close button; the assign bar carries a link to
 `/analytics/workload` rather than a second screen's worth of numbers.
 
+**Every day carries `freeMinutes`/`freeHours`** — the target less everything
+committed, floored at zero and zero on weekends. The "Unassigned capacity" card
+is the sum of exactly that field, so the cells and the card cannot disagree.
+The cell draws the remainder as a pale blue segment on top of the stack: spare
+capacity is what a planner is usually being read for, and an empty-looking
+square is not the same as one that says three hours are free.
+
 ```bash
-npx tsx scripts/test-daily-hours.ts  # spread, sequential, simultaneous, unconfigured, non-AR
+npx tsx scripts/test-daily-hours.ts  # spread, sequential, simultaneous, unconfigured fallback, free hours
 ```
+
+### Test fixtures leak when a test crashes
+
+Every test script creates `ZZ`-prefixed rows and deletes them at the end. A
+script that throws part-way never reaches its cleanup, and **a leaked user is
+not inert**: it is an active biller, so it appears in assignee dropdowns, in
+roll-ups, and on the workload planner. Nine of them once contributed 675
+fictional hours of spare capacity.
+
+```bash
+npx tsx scripts/cleanup-zz-test-data.ts            # dry run, prints what it found
+npx tsx scripts/cleanup-zz-test-data.ts --confirm  # deletes
+```
+
+Dry run by default, and it refuses outright if the pattern matches half the
+user table — a prefix match is a blunt instrument against a live database.
+Deletion order is children first, because most relations to `User` are
+required; practices go last and need no unpicking, since nearly everything
+under one cascades. Worth running after any test run that ends in a stack
+trace.
 
 ### Recurring-task projection
 
