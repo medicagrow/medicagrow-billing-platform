@@ -168,6 +168,10 @@ export async function POST(request: NextRequest) {
       // empty and the instances carry the dates.
       dueDate:
         input.isRecurring || !input.dueDate ? null : dayStart(input.dueDate),
+      // A range and a rate, for the task types that spread over days rather
+      // than landing on one. Null on everything else, which is the old shape.
+      startDate: input.startDate ? dayStart(input.startDate) : null,
+      dailyHours: input.dailyHours ?? null,
       estimatedMinutes: input.estimatedMinutes ?? null,
       priority: input.priority,
       status: input.status,

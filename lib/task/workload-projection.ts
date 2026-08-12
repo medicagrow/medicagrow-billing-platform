@@ -2,6 +2,11 @@ import { TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { getTaskLabel } from "@/lib/task/task-label";
 import {
+  dailyHoursOf,
+  spreadDays,
+  usesDailyHours,
+} from "@/lib/task/daily-hours";
+import {
   dueDateFor,
   isWeekend,
   nextOccurrence,
@@ -126,6 +131,10 @@ export async function projectRecurringTasks(
       practice: { select: { name: true } },
       taskTypeId: true,
       taskType: { select: { name: true } },
+      startDate: true,
+      dueDate: true,
+      dailyHours: true,
+      createdAt: true,
     },
   });
 
@@ -158,6 +167,54 @@ export async function projectRecurringTasks(
     if (!config) continue;
 
     const label = getTaskLabel(parent);
+
+    /**
+     * A recurring AR project is still a rate over a range, not a series of
+     * deadlines. Walking its frequency would put a whole month's estimate on
+     * one day of each week — the same distortion the daily-hours model exists
+     * to remove — so it is spread instead, exactly as a one-off AR task is.
+     *
+     * The range runs from the series' next due date (or the window's start,
+     * whichever is later) to its end date, if it has one.
+     */
+    const arHours = usesDailyHours(parent.taskType?.name)
+      ? dailyHoursOf(parent)
+      : null;
+
+    if (arHours !== null) {
+      const minutes = Math.round(arHours * 60);
+
+      const spread = spreadDays(
+        {
+          startDate: parent.startDate ?? toUtcDate(config.nextDueDate),
+          dueDate: config.endDate ? toUtcDate(config.endDate) : to,
+          createdAt: parent.createdAt,
+          dailyHours: parent.dailyHours,
+        },
+        from,
+        to,
+      );
+
+      for (const iso of spread) {
+        if (alreadyReal.has(`${parent.id}:${iso}`)) continue;
+
+        projected.push({
+          billerUserId: parent.assignedToId,
+          billerName: parent.assignedTo.name,
+          practiceId: parent.practiceId,
+          practiceName: parent.practice?.name ?? null,
+          taskTypeId: parent.taskTypeId,
+          taskTypeName: parent.taskType?.name ?? null,
+          dueDate: toUtcDate(iso),
+          estimatedMinutes: minutes,
+          isProjected: true,
+          parentTaskId: parent.id,
+          parentTaskLabel: label,
+        });
+      }
+
+      continue;
+    }
 
     for (const dueDate of occurrencesInWindow(config, from, to)) {
       const iso = toIsoDate(dueDate);

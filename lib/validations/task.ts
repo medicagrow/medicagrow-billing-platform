@@ -40,6 +40,36 @@ const requiresDays = (config: z.infer<typeof recurringConfigSchema>) =>
   (config.frequency !== "weekly" && config.frequency !== "biweekly") ||
   (config.daysOfWeek !== undefined && config.daysOfWeek.length > 0);
 
+/**
+ * Hours per day an AR follow-up project should consume.
+ *
+ * Bounded at 8: a whole working day on one practice's AR is the most that can
+ * be true, and a typo of 40 would silently swamp the planner. Half-hour steps
+ * are what the form offers, but the schema does not enforce them — a value
+ * arriving from an import or a fix-up script has no reason to be rejected for
+ * being 1.25.
+ */
+export const MAX_DAILY_HOURS = 8;
+
+const dailyHoursSchema = z.coerce
+  .number()
+  .positive("Daily hours must be more than zero")
+  .max(MAX_DAILY_HOURS, `Daily hours cannot exceed ${MAX_DAILY_HOURS}`);
+
+/** A start date after the due date describes a range that never happens. */
+const startsBeforeDue = (data: {
+  startDate?: string | Date | null;
+  dueDate?: string | Date | null;
+}) => {
+  if (!data.startDate || !data.dueDate) return true;
+  return new Date(data.startDate) <= new Date(data.dueDate);
+};
+
+const STARTS_BEFORE_DUE = {
+  message: "Work cannot start after the task is due.",
+  path: ["startDate"],
+};
+
 export const createTaskSchema = z
   .object({
     // Tasks are identified by their type and practice, not a typed-in title.
@@ -48,6 +78,14 @@ export const createTaskSchema = z
     taskTypeId: z.string().min(1, "Please select a task type"),
     assignedToId: z.string().min(1, "Assignee is required"),
     dueDate: dateStringSchema.optional(),
+    /**
+     * Claim Follow-up spreads over a range rather than landing on a deadline,
+     * so it carries a start and an hours-per-day. Optional on every type: the
+     * form only offers them for that one, and a null means "count this on its
+     * due date" exactly as before.
+     */
+    startDate: dateStringSchema.optional(),
+    dailyHours: dailyHoursSchema.optional(),
     estimatedMinutes: z.coerce.number().int().min(0).max(MAX_ESTIMATED_MINUTES).optional(),
     priority: z.enum(TodoPriority).default(TodoPriority.MEDIUM),
     status: z.enum(TaskStatus).default(TaskStatus.OPEN),
@@ -65,6 +103,7 @@ export const createTaskSchema = z
       path: ["holdReleaseDate"],
     },
   )
+  .refine(startsBeforeDue, STARTS_BEFORE_DUE)
   .refine((data) => !data.isRecurring || data.recurringConfig !== undefined, {
     message: "A recurring task needs a recurrence pattern.",
     path: ["recurringConfig"],
@@ -85,6 +124,8 @@ export const updateTaskSchema = z
     taskTypeId: optionalText(40),
     assignedToId: z.string().min(1).optional(),
     dueDate: dateStringSchema.nullable().optional(),
+    startDate: dateStringSchema.nullable().optional(),
+    dailyHours: dailyHoursSchema.nullable().optional(),
     estimatedMinutes: z.coerce
       .number()
       .int()
@@ -126,6 +167,7 @@ export const updateTaskSchema = z
       path: ["holdReleaseDate"],
     },
   )
+  .refine(startsBeforeDue, STARTS_BEFORE_DUE)
   .refine(
     (data) => !data.recurringConfig || requiresDays(data.recurringConfig),
     {

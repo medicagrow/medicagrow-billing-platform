@@ -4,6 +4,12 @@ import { Badge } from "@/components/ui/Badge";
 import { Input, Label } from "@/components/ui/Input";
 import { NumericInput } from "@/components/ui/inputs/NumericInput";
 import { PracticeField } from "@/components/ui/PracticeField";
+import {
+  DAILY_HOURS_STEP,
+  MAX_DAILY_HOURS,
+  MIN_DAILY_HOURS,
+  usesDailyHours,
+} from "@/lib/task/daily-hours";
 import { Select } from "@/components/ui/Select";
 import { TaskStatus, TodoPriority } from "@/lib/generated/prisma/enums";
 import {
@@ -24,6 +30,9 @@ export interface TaskFormValues {
   taskTypeId: string;
   assignedToId: string;
   dueDate: string;
+  /** Claim Follow-up only — a range and a rate, not a deadline. */
+  startDate: string;
+  dailyHours: string;
   estimatedMinutes: string;
   priority: TodoPriority;
   status: TaskStatus;
@@ -72,6 +81,8 @@ export function emptyTaskForm(assignedToId: string): TaskFormValues {
     taskTypeId: "",
     assignedToId,
     dueDate: "",
+    startDate: "",
+    dailyHours: "",
     estimatedMinutes: "",
     priority: TodoPriority.MEDIUM,
     status: TaskStatus.OPEN,
@@ -382,6 +393,15 @@ export function TaskFormFields({
   showRecurrence?: boolean;
   idPrefix?: string;
 }) {
+  /**
+   * Whether this task type spreads over a range. Read from the selected type's
+   * name rather than a flag on the option, so the one rule in
+   * lib/task/daily-hours.ts decides it for the form and the planner alike.
+   */
+  const spreadsOverDays = usesDailyHours(
+    taskTypes.find((type) => type.id === values.taskTypeId)?.name,
+  );
+
   return (
     <div className="space-y-4">
       {/* Type identifies the task, so it leads and it is required. */}
@@ -459,6 +479,53 @@ export function TaskFormFields({
             />
           </div>
         )}
+
+        {/*
+          AR follow-up is a rate over a range rather than a deadline, so it
+          gets a start and an hours-per-day. Hidden for every other task type:
+          two fields that mean nothing on a charge-posting task are two fields
+          somebody has to learn to ignore.
+        */}
+        {spreadsOverDays ? (
+          <>
+            <div className="space-y-1.5">
+              <Label htmlFor={`${idPrefix}startDate`}>Work starts from</Label>
+              <Input
+                id={`${idPrefix}startDate`}
+                type="date"
+                value={values.startDate}
+                max={values.dueDate || undefined}
+                onChange={(event) => onChange("startDate", event.target.value)}
+                disabled={disabled}
+              />
+              <p className="text-xs text-slate-500">
+                Defaults to today. Must be on or before the due date.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor={`${idPrefix}dailyHours`}>
+                Daily hours allocated
+              </Label>
+              <Input
+                id={`${idPrefix}dailyHours`}
+                type="number"
+                inputMode="decimal"
+                min={MIN_DAILY_HOURS}
+                max={MAX_DAILY_HOURS}
+                step={DAILY_HOURS_STEP}
+                value={values.dailyHours}
+                onChange={(event) => onChange("dailyHours", event.target.value)}
+                disabled={disabled}
+                placeholder="—"
+              />
+              <p className="text-xs text-slate-500">
+                How many hours per day should this biller spend on this
+                project&rsquo;s AR follow-up?
+              </p>
+            </div>
+          </>
+        ) : null}
 
         <div className="space-y-1.5">
           <Label htmlFor={`${idPrefix}estimatedMinutes`}>

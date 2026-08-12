@@ -177,6 +177,10 @@ export async function PATCH(
   if (input.dueDate !== undefined) {
     data.dueDate = input.dueDate ? dayStart(input.dueDate) : null;
   }
+  if (input.startDate !== undefined) {
+    data.startDate = input.startDate ? dayStart(input.startDate) : null;
+  }
+  if (input.dailyHours !== undefined) data.dailyHours = input.dailyHours;
 
   /**
    * Turning recurrence on converts the task into the series template, and a

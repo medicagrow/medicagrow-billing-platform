@@ -1,7 +1,13 @@
 import { Role, TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { projectRecurringTasks } from "@/lib/task/workload-projection";
+import {
+  DAILY_HOURS_TASK_TYPE,
+  dailyHoursOf,
+  spreadDays,
+} from "@/lib/task/daily-hours";
 import { isWeekend, toIsoDate } from "@/lib/task/recurrence-config";
+import { getTaskLabel } from "@/lib/task/task-label";
 import { dayStart } from "@/lib/todo/access";
 
 /**
@@ -12,16 +18,48 @@ import { dayStart } from "@/lib/todo/access";
  * not, it is what has been assigned. Mixing them — estimating yesterday, or
  * reporting zero logged hours for next Tuesday — makes the grid unreadable.
  *
- * Projected recurring work is kept separate from assigned work all the way to
- * the UI, because a projection is a forecast and a plan built on one should
- * say so.
+ * Three kinds of load land on a day, and they are kept apart all the way to
+ * the UI because they carry different certainty:
+ *
+ *  - **assigned** — a real task, due that day;
+ *  - **AR** — a Claim Follow-up project's daily rate, spread across the
+ *    working days of its range (see lib/task/daily-hours.ts);
+ *  - **projected** — a recurring occurrence that does not exist yet.
+ *
+ * A plan built on a forecast should say so, and a plan that hides a biller's
+ * standing two hours a day of AR behind another PM's practice is worse than no
+ * plan at all.
  */
+
+export type WorkloadItemKind = "assigned" | "ar" | "projected";
+
+export interface WorkloadItem {
+  label: string;
+  practiceName: string | null;
+  minutes: number;
+  kind: WorkloadItemKind;
+  /** Kept for callers written before `kind` existed. */
+  isProjected: boolean;
+  /**
+   * An AR block belonging to a practice this viewer does not manage. Shown,
+   * because it consumes the biller's day either way, but not editable and not
+   * broken down further — the other PM's task detail is not this PM's business.
+   */
+  isOtherPm?: boolean;
+  taskId?: string;
+  /** AR blocks only, for the tooltip. */
+  dailyHours?: number;
+  startDate?: string | null;
+  dueDate?: string | null;
+}
 
 export interface WorkloadDay {
   /** YYYY-MM-DD, UTC. */
   date: string;
   /** Real tasks: logged minutes for a past day, estimated for a future one. */
   actualMinutes: number;
+  /** Claim Follow-up daily rates active on this day. */
+  arMinutes: number;
   /** Recurring occurrences that do not exist yet. */
   projectedMinutes: number;
   totalMinutes: number;
@@ -31,13 +69,19 @@ export interface WorkloadDay {
   isWeekend: boolean;
   /** True once the day is today or later — the projection half applies. */
   isFuture: boolean;
-  /** What is on the day, for the cell's tooltip. */
-  items: {
-    label: string;
-    practiceName: string | null;
-    minutes: number;
-    isProjected: boolean;
-  }[];
+  /** What is on the day, for the cell's tooltip and its stacked blocks. */
+  items: WorkloadItem[];
+}
+
+/** A Claim Follow-up task the planner cannot place. */
+export interface UnconfiguredArTask {
+  taskId: string;
+  label: string;
+  practiceId: string | null;
+  practiceName: string | null;
+  dueDate: string | null;
+  /** False when it belongs to a practice this viewer does not manage. */
+  canConfigure: boolean;
 }
 
 export interface WorkloadBiller {
@@ -49,6 +93,8 @@ export interface WorkloadBiller {
   /** Working days in the window with nothing on them at all. */
   emptyDays: number;
   overCapacityDays: number;
+  /** AR projects with no daily hours set — the planner is wrong without them. */
+  unconfiguredAr: UnconfiguredArTask[];
 }
 
 export interface WorkloadAlert {
@@ -69,6 +115,7 @@ export interface WorkloadResult {
     underAssigned: number;
     unassignedCapacityHours: number;
     daysWithGaps: number;
+    unconfiguredArTasks: number;
   };
   alerts: WorkloadAlert[];
 }
@@ -99,12 +146,34 @@ export async function getWorkloadData(params: {
   userIds?: string[];
   /** 7.5 or 8, as hours. */
   targetHoursPerDay: number;
+  /**
+   * The practices the viewer manages; null for an Owner, who manages all.
+   *
+   * AR blocks are deliberately **not** narrowed by this — a biller's day is
+   * consumed by every practice's AR, and a PM planning around only their own
+   * would over-commit somebody who is already full. What this decides is which
+   * blocks are labelled as another PM's and which can be opened.
+   */
+  viewerPracticeIds?: string[] | null;
 }): Promise<WorkloadResult> {
   const dates = daysBetween(params.from, params.to);
   const targetMinutesPerDay = Math.round(params.targetHoursPerDay * 60);
   const today = toIsoDate(dayStart());
 
-  const [billers, tasks, sessions, projected] = await Promise.all([
+  /** Which practices this viewer may open a task in. */
+  const viewerScope = params.viewerPracticeIds;
+  const managedByViewer = (practiceId: string | null) =>
+    viewerScope === null || viewerScope === undefined
+      ? true
+      : practiceId !== null && viewerScope.includes(practiceId);
+
+  const isArType = {
+    taskType: {
+      is: { name: { equals: DAILY_HOURS_TASK_TYPE, mode: "insensitive" as const } },
+    },
+  };
+
+  const [billers, tasks, arTasks, sessions, projected] = await Promise.all([
     prisma.user.findMany({
       where: {
         isActive: true,
@@ -117,11 +186,17 @@ export async function getWorkloadData(params: {
       orderBy: { name: "asc" },
       select: { id: true, name: true, role: true },
     }),
-    /** Assigned work with a due date in the window — the future half. */
+    /**
+     * Assigned work with a due date in the window — the future half. AR
+     * follow-up is excluded here and handled below: it occupies a range, so
+     * placing it on its due date would draw a month of work as one enormous
+     * Friday.
+     */
     prisma.task.findMany({
       where: {
         dueDate: { gte: params.from, lte: params.to },
         isRecurring: false,
+        NOT: isArType,
         ...(params.userIds?.length
           ? { assignedToId: { in: params.userIds } }
           : {}),
@@ -135,6 +210,40 @@ export async function getWorkloadData(params: {
         dueDate: true,
         status: true,
         estimatedMinutes: true,
+        assignedToId: true,
+        practiceId: true,
+        practice: { select: { name: true } },
+        taskType: { select: { name: true } },
+      },
+    }),
+    /**
+     * AR projects whose active range **overlaps** the window — a task due on
+     * the 31st is occupying every day before it, so a `dueDate in window`
+     * filter would miss it entirely for the first half of the month.
+     *
+     * Deliberately **not** narrowed by `practiceIds`: see `viewerPracticeIds`.
+     */
+    prisma.task.findMany({
+      where: {
+        ...isArType,
+        isRecurring: false,
+        status: { not: TaskStatus.CLOSED },
+        dueDate: { gte: params.from },
+        OR: [
+          { startDate: { lte: params.to } },
+          { startDate: null, createdAt: { lte: params.to } },
+        ],
+        ...(params.userIds?.length
+          ? { assignedToId: { in: params.userIds } }
+          : {}),
+      },
+      select: {
+        id: true,
+        title: true,
+        startDate: true,
+        dueDate: true,
+        dailyHours: true,
+        createdAt: true,
         assignedToId: true,
         practiceId: true,
         practice: { select: { name: true } },
@@ -172,6 +281,7 @@ export async function getWorkloadData(params: {
 
   /** userId → date → day. */
   const grid = new Map<string, Map<string, WorkloadDay>>();
+  const unconfigured = new Map<string, UnconfiguredArTask[]>();
 
   for (const biller of billers) {
     const days = new Map<string, WorkloadDay>();
@@ -180,6 +290,7 @@ export async function getWorkloadData(params: {
       days.set(date, {
         date,
         actualMinutes: 0,
+        arMinutes: 0,
         projectedMinutes: 0,
         totalMinutes: 0,
         isOverCapacity: false,
@@ -191,10 +302,10 @@ export async function getWorkloadData(params: {
     }
 
     grid.set(biller.id, days);
+    unconfigured.set(biller.id, []);
   }
 
-  const dayFor = (userId: string, date: string) =>
-    grid.get(userId)?.get(date);
+  const dayFor = (userId: string, date: string) => grid.get(userId)?.get(date);
 
   // Past days read from the timer; future days from what is assigned.
   for (const session of sessions) {
@@ -206,10 +317,10 @@ export async function getWorkloadData(params: {
 
     day.actualMinutes += session.durationMinutes ?? 0;
     day.items.push({
-      label:
-        session.task.taskType?.name ?? session.task.title ?? "Task",
+      label: session.task.taskType?.name ?? session.task.title ?? "Task",
       practiceName: session.task.practice?.name ?? null,
       minutes: session.durationMinutes ?? 0,
+      kind: "assigned",
       isProjected: false,
     });
   }
@@ -231,8 +342,62 @@ export async function getWorkloadData(params: {
       label: task.taskType?.name ?? task.title ?? "Task",
       practiceName: task.practice?.name ?? null,
       minutes: task.estimatedMinutes ?? 0,
+      kind: "assigned",
       isProjected: false,
+      taskId: task.id,
     });
+  }
+
+  /**
+   * AR projects, spread over their range.
+   *
+   * Two of these on the same day stack rather than replace each other, which
+   * is the whole reason the rate is per task: 3h/day on one practice and 1h a
+   * day on another is a four-hour commitment, and the old model could not say
+   * that.
+   */
+  for (const task of arTasks) {
+    const hours = dailyHoursOf(task);
+    const isOtherPm = !managedByViewer(task.practiceId);
+
+    if (hours === null) {
+      // Unconfigured: counted nowhere, reported everywhere.
+      unconfigured.get(task.assignedToId)?.push({
+        taskId: task.id,
+        label: getTaskLabel(task),
+        practiceId: task.practiceId,
+        practiceName: task.practice?.name ?? null,
+        dueDate: task.dueDate?.toISOString() ?? null,
+        canConfigure: !isOtherPm,
+      });
+      continue;
+    }
+
+    const minutes = Math.round(hours * 60);
+
+    for (const date of spreadDays(task, params.from, params.to)) {
+      // A past day reports what the timer recorded, not what was planned.
+      if (date < today) continue;
+
+      const day = dayFor(task.assignedToId, date);
+      if (!day) continue;
+
+      day.arMinutes += minutes;
+      day.items.push({
+        label: `AR — ${task.practice?.name ?? "No practice"}${
+          isOtherPm ? " (other PM)" : ""
+        }`,
+        practiceName: task.practice?.name ?? null,
+        minutes,
+        kind: "ar",
+        isProjected: false,
+        isOtherPm,
+        taskId: task.id,
+        dailyHours: hours,
+        startDate: (task.startDate ?? task.createdAt).toISOString(),
+        dueDate: task.dueDate?.toISOString() ?? null,
+      });
+    }
   }
 
   for (const projection of projected) {
@@ -247,6 +412,7 @@ export async function getWorkloadData(params: {
       label: projection.taskTypeName ?? projection.parentTaskLabel,
       practiceName: projection.practiceName,
       minutes: projection.estimatedMinutes,
+      kind: "projected",
       isProjected: true,
     });
   }
@@ -255,7 +421,8 @@ export async function getWorkloadData(params: {
     const days = dates.map((date) => {
       const day = dayFor(biller.id, date)!;
 
-      day.totalMinutes = day.actualMinutes + day.projectedMinutes;
+      day.totalMinutes =
+        day.actualMinutes + day.arMinutes + day.projectedMinutes;
 
       // A weekend has no target, so it is neither short nor over.
       if (!day.isWeekend) {
@@ -278,6 +445,7 @@ export async function getWorkloadData(params: {
       totalMinutes: days.reduce((sum, day) => sum + day.totalMinutes, 0),
       emptyDays: workingDays.filter((day) => day.totalMinutes === 0).length,
       overCapacityDays: workingDays.filter((day) => day.isOverCapacity).length,
+      unconfiguredAr: unconfigured.get(biller.id) ?? [],
     };
   });
 
@@ -315,6 +483,23 @@ export async function getWorkloadData(params: {
         } in this range.`,
       });
     }
+
+    /**
+     * An unconfigured AR project makes every other number on this row a lie,
+     * so it outranks a quiet day: the biller may be fully committed and the
+     * grid simply cannot see it.
+     */
+    if (biller.unconfiguredAr.length > 0) {
+      alerts.push({
+        userId: biller.userId,
+        userName: biller.name,
+        severity: "amber",
+        message: `${biller.name} has ${biller.unconfiguredAr.length} AR task${
+          biller.unconfiguredAr.length === 1 ? "" : "s"
+        } with no daily hours configured — this row may be inaccurate.`,
+        suggestion: "Set daily hours on the task to place it on the grid.",
+      });
+    }
   }
 
   const futureWorking = (biller: WorkloadBiller) =>
@@ -350,6 +535,10 @@ export async function getWorkloadData(params: {
       }).length,
       unassignedCapacityHours: Math.round((unassignedMinutes / 60) * 10) / 10,
       daysWithGaps: rows.reduce((sum, biller) => sum + biller.emptyDays, 0),
+      unconfiguredArTasks: rows.reduce(
+        (sum, biller) => sum + biller.unconfiguredAr.length,
+        0,
+      ),
     },
     alerts,
   };

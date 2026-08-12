@@ -30,6 +30,9 @@ export interface TaskDto {
   assignedToId: string;
   assignedToName: string | null;
   dueDate: string | null;
+  /** Set with `dailyHours` on work that spreads over a range. */
+  startDate: string | null;
+  dailyHours: string | null;
   estimatedMinutes: number | null;
   actualMinutes: number | null;
 
@@ -79,6 +82,8 @@ type TaskRow = {
   createdById: string;
   assignedToId: string;
   dueDate: Date | null;
+  startDate?: Date | null;
+  dailyHours?: unknown;
   estimatedMinutes: number | null;
   actualMinutes: number | null;
   totalLoggedMinutes?: number;
@@ -137,6 +142,12 @@ export function toTaskDto(task: TaskRow): TaskDto {
     assignedToId: task.assignedToId,
     assignedToName: task.assignedTo?.name ?? null,
     dueDate: task.dueDate?.toISOString() ?? null,
+    startDate: task.startDate?.toISOString() ?? null,
+    // Decimal crosses the boundary as a string, never a float.
+    dailyHours:
+      task.dailyHours === null || task.dailyHours === undefined
+        ? null
+        : String(task.dailyHours),
     estimatedMinutes: task.estimatedMinutes,
     actualMinutes: task.actualMinutes,
     totalLoggedMinutes: task.totalLoggedMinutes ?? 0,

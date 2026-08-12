@@ -13,6 +13,7 @@ import {
   type TaskTypeOption,
 } from "@/components/task/TaskFormFields";
 import type { TaskDto } from "@/lib/task-serialize";
+import { usesDailyHours } from "@/lib/task/daily-hours";
 import {
   parseRecurringConfig,
   WEEKDAYS,
@@ -59,6 +60,8 @@ function formFor(task: TaskDto): TaskFormValues {
     taskTypeId: task.taskTypeId ?? "",
     assignedToId: task.assignedToId,
     dueDate: task.dueDate ? task.dueDate.slice(0, 10) : "",
+    startDate: task.startDate ? task.startDate.slice(0, 10) : "",
+    dailyHours: task.dailyHours ?? "",
     estimatedMinutes:
       task.estimatedMinutes === null ? "" : String(task.estimatedMinutes),
     priority: task.priority,
@@ -177,6 +180,9 @@ export function TaskEditModal({
               assignedToId: values.assignedToId,
               description: values.description || null,
               dueDate: values.dueDate || null,
+              startDate: values.startDate || null,
+              dailyHours:
+                values.dailyHours === "" ? null : Number(values.dailyHours),
               estimatedMinutes:
                 values.estimatedMinutes === ""
                   ? null
@@ -230,6 +236,18 @@ export function TaskEditModal({
       title={partOfSeries ? "Edit Recurring Task Series" : "Edit Task"}
     >
       <form onSubmit={handleSubmit} className="space-y-4">
+        {/*
+          An AR task saved before daily hours existed draws nothing on the
+          workload planner. Saying so here — where it can be fixed — beats
+          leaving the planner quietly wrong.
+        */}
+        {usesDailyHours(task.taskTypeName) && task.dailyHours === null ? (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-inset ring-amber-200">
+            Daily hours not configured — workload planner cannot show this task
+            correctly until set.
+          </p>
+        ) : null}
+
         <TaskFormFields
           values={values}
           onChange={set}

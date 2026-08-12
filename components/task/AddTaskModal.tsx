@@ -88,6 +88,9 @@ export function AddTaskModal({
           taskTypeId: values.taskTypeId || null,
           assignedToId: values.assignedToId,
           dueDate: values.dueDate || undefined,
+          // Only ever filled for the task types the form offers them on.
+          startDate: values.startDate || undefined,
+          dailyHours: values.dailyHours || undefined,
           estimatedMinutes: values.estimatedMinutes || undefined,
           priority: values.priority,
           status: values.status,

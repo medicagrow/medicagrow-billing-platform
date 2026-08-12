@@ -682,6 +682,18 @@ model Task {
   estimatedMinutes Int?
   /// Filled in when the task is closed, so estimates can be checked.
   actualMinutes    Int?
+
+  /// When work on this task begins. With `dueDate` it defines an **active
+  /// range** rather than a single deadline, which is what AR follow-up
+  /// actually is: a month of chasing a batch, not a thing due on the 31st.
+  startDate  DateTime?
+  /// Hours per day this task should consume across that range.
+  ///
+  /// Only meaningful for Claim Follow-up — the form shows it for that type
+  /// alone — but stored on every task rather than in a side table: it is one
+  /// nullable column against a join, and a null already means "spread this
+  /// over nothing, count it on its due date" for the rest.
+  dailyHours Decimal?  @db.Decimal(4, 2)
   priority         TodoPriority @default(MEDIUM)
   status           TaskStatus   @default(OPEN)
 

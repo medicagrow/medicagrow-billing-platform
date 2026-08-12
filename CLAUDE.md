@@ -606,9 +606,11 @@ drill-down; the way in is now a biller row on the Time & Productivity report.
   estimate is counted **once per task per group**, not once per session.
 - **Workload Planner** (`/analytics/workload`) — assigned hours per biller per
   day. Past days read from `TaskTimeLog`, today and later from assigned
-  estimates **plus `projectRecurringTasks()`**. Projected load is drawn hatched
-  over the same colour, so a full day of forecast never reads as a full day of
-  committed work.
+  estimates **plus AR daily rates plus `projectRecurringTasks()`**. Each day is
+  a **stack**, not a flat colour: teal for AR, pale teal for another PM's AR,
+  green/red for assigned work, hatched grey for projections — a full day made
+  of three commitments needs to say which one to move. See "AR follow-up is a
+  rate, not a deadline" below.
 - **Resource Requirements** (`/analytics/resource-requirements`) — what each
   practice committed to against the hours booked to deliver it, per **month**,
   because a `PracticeRequirement` is per month and measuring a monthly
@@ -620,6 +622,63 @@ drill-down; the way in is now a biller row on the Time & Productivity report.
   other four, with its edit history and flags. "Flagged only" cannot be a
   database filter (flags are derived), so that one case reads the window and
   pages in memory; everything else pages in SQL.
+
+### AR follow-up is a rate, not a deadline
+
+Claim Follow-up carries `startDate` + `dailyHours` on `Task`, and the planner
+spreads that rate across the **working days** between the start and the due
+date. Every other task type is unchanged: its estimate lands on its due date.
+
+The rules live in [lib/task/daily-hours.ts](lib/task/daily-hours.ts), free of
+Prisma so the task form and the planner read the same ones.
+
+- A biller is given a practice's book for the month and spends two hours a day
+  on it. As a deadline that draws as one enormous Friday and nothing else —
+  the opposite of what is happening. Two things fall out of the spread for
+  free: **sequential** projects do not overlap, and **simultaneous** ones add
+  up on each day rather than hiding behind each other.
+- An unset `startDate` falls back to the task's `createdAt`, not the epoch:
+  assigned work is being done from the moment it lands.
+- **`dailyHours: null` on a Claim Follow-up means unconfigured, not zero.** It
+  is counted nowhere and reported separately — as a summary card, a panel under
+  the grid, and an alert. Counting it as zero would make a fully committed
+  biller look free, which is the failure this whole model exists to prevent.
+- The form shows both fields for that task type alone; the edit modal warns
+  when an existing AR task has no daily hours.
+- The AR query in `getWorkloadData()` matches on **range overlap**
+  (`dueDate >= from AND start <= to`), not `dueDate` in the window — a task due
+  on the 31st occupies every day before it.
+- Recurring AR parents go through the same spread rather than the frequency
+  walk, for the same reason.
+
+**Multi-PM visibility is deliberate.** AR blocks are **not** narrowed by the
+practice filter: a biller's day is consumed by every practice's AR, and a PM
+planning around only their own would over-commit somebody already full. What
+`viewerPracticeIds` decides is which blocks are labelled "(other PM)", drawn
+paler, and not offered for editing — accurate capacity without exposing another
+PM's task detail.
+
+### Biller capacity, before the claims are handed out
+
+`GET /api/ar/batches/[batchId]/biller-capacity` answers "who has room for this
+batch" beside the assign controls, over the batch's own life (upload date →
+target date, or end of month).
+
+- **Free hours** come from `getWorkloadData()` rather than a second
+  calculation — two answers to "how booked is this person" would drift.
+  Non-AR load only, since the AR half is subtracted separately and shown
+  broken down by practice with the PM who owns each.
+- **Estimated claims capacity** divides net hours by
+  `getAvgMinutesPerClaim()` in [lib/analytics/claim-avg.ts](lib/analytics/claim-avg.ts):
+  closed Claim Follow-up tasks' `totalLoggedMinutes ÷ productivityCount`, both
+  of which are now measured rather than typed. **Minimum five tasks** — two is
+  an anecdote — then it falls back to the team average and says so. Summed then
+  divided, never an average of per-task rates, so a two-claim task cannot swing
+  it. Cached an hour per instance, the same trade `lib/lazy-schedule.ts` makes.
+
+```bash
+npx tsx scripts/test-daily-hours.ts  # spread, sequential, simultaneous, unconfigured, non-AR
+```
 
 ### Recurring-task projection
 
