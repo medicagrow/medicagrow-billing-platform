@@ -28,6 +28,9 @@ export const STATUSES_BY_OUTCOME: Record<OutcomeType, StatusLabel[]> = {
     "Paid & Posted",
     "Paid but not Posted",
     "Confirm if Cashed",
+    // A paid claim can still need a call — to confirm the payment details, or
+    // to chase whether a cheque was actually cashed.
+    "Need to Call",
     "Check with Office",
     "Inactive Insurance",
     "Provider OON",
@@ -40,6 +43,9 @@ export const STATUSES_BY_OUTCOME: Record<OutcomeType, StatusLabel[]> = {
     "Resubmitted",
     "Written Off",
     "Need to Write Off",
+    // A denial is often not actionable until somebody has called the payer to
+    // find out why, so the call comes before the appeal or the write-off.
+    "Need to Call",
     "Check with Office",
     "Inactive Insurance",
     "Provider OON",
