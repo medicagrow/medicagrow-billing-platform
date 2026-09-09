@@ -24,7 +24,11 @@ import { AGING_BUCKETS } from "@/lib/ar-aging";
 import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { isBoolean, useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import type { ClaimDto } from "@/lib/ar-serialize";
+import { downloadCsv } from "@/lib/csv-export";
 import { formatDate, formatUSD } from "@/lib/format";
+import { ALL_STATUSES, statusLabelToCategory } from "@/lib/ar-status";
+import type { StatusCategory } from "@/lib/generated/prisma/enums";
+import { formatDateIST } from "@/lib/timezone";
 
 export type TabKey =
   | "all"
@@ -49,6 +53,124 @@ const TABS: { key: TabKey; label: string }[] = [
 
 /** "Nobody" is a choice in the Assigned To list, but it is not a user. */
 const UNASSIGNED = "__unassigned__";
+
+/**
+ * The three categories, in the order a claim moves through them, with what
+ * each one actually means — "Red" alone tells a new PM nothing.
+ */
+const CATEGORY_OPTIONS: {
+  value: StatusCategory;
+  label: string;
+  dot: string;
+}[] = [
+  {
+    value: "RED",
+    label: "Red — Biller Action Pending",
+    dot: "bg-red-500",
+  },
+  {
+    value: "BLUE",
+    label: "Blue — Blocked on Practice",
+    dot: "bg-sky-500",
+  },
+  {
+    value: "GREEN",
+    label: "Green — Biller Action Complete",
+    dot: "bg-emerald-500",
+  },
+];
+
+/**
+ * The export's columns, in order, and the row that fills them.
+ *
+ * Declared beside each other so a column added to one without the other is a
+ * visible mistake rather than a silently shifted spreadsheet.
+ */
+const EXPORT_COLUMNS = [
+  "Patient Name",
+  "Date of Service",
+  "Insurance Name",
+  "Claim#",
+  "CPT Code",
+  "Visit ID",
+  "Visit Status",
+  "Provider",
+  "Billed Amount",
+  "Insurance Paid",
+  "Patient Paid",
+  "Balance",
+  "Aging Days",
+  "Status Category",
+  "Status Label",
+  "Assigned To",
+  "Follow-up Date",
+  "Last Worked Date",
+  "Last Worked By",
+  "Last Note",
+];
+
+interface ExportRow {
+  patientName: string;
+  dateOfService: string;
+  insuranceName: string;
+  claimNumber: string | null;
+  cptCode: string | null;
+  visitId: string | null;
+  visitStatus: string | null;
+  provider: string | null;
+  billedAmount: string | null;
+  insurancePaid: string | null;
+  patientPaid: string | null;
+  balance: string;
+  agingDays: number;
+  statusCategory: StatusCategory;
+  statusLabel: string;
+  assignedToName: string | null;
+  followUpDate: string | null;
+  lastWorkedAt: string | null;
+  lastWorkedByName: string | null;
+  lastNote: string | null;
+}
+
+const CATEGORY_WORD: Record<StatusCategory, string> = {
+  RED: "Red",
+  BLUE: "Blue",
+  GREEN: "Green",
+};
+
+function exportRow(row: ExportRow) {
+  return [
+    row.patientName,
+    // Dates of service and follow-ups are calendar dates at UTC midnight, so
+    // they format in UTC; the last-worked stamp is a moment, so it is IST.
+    formatDate(row.dateOfService),
+    row.insuranceName,
+    row.claimNumber ?? "",
+    row.cptCode ?? "",
+    row.visitId ?? "",
+    row.visitStatus ?? "",
+    row.provider ?? "",
+    row.billedAmount ?? "",
+    row.insurancePaid ?? "",
+    row.patientPaid ?? "",
+    row.balance,
+    row.agingDays,
+    CATEGORY_WORD[row.statusCategory],
+    row.statusLabel,
+    row.assignedToName ?? "",
+    row.followUpDate ? formatDate(row.followUpDate) : "",
+    row.lastWorkedAt ? formatDateIST(row.lastWorkedAt) : "",
+    row.lastWorkedByName ?? "",
+    row.lastNote ?? "",
+  ];
+}
+
+/** Headings the status labels are listed under. */
+const CATEGORY_GROUP: Record<StatusCategory, string> = {
+  RED: "🔴 Red",
+  BLUE: "🔵 Blue",
+  GREEN: "🟢 Green",
+};
 
 interface Assignee {
   id: string;
@@ -77,6 +199,8 @@ const FILTER_DEFAULTS = {
   aging: [] as string[],
   provider: [] as string[],
   assignedTo: [] as string[],
+  statusCategories: [] as string[],
+  statusLabels: [] as string[],
   /** Brings the 0–30 day bucket back into a list that excludes it. */
   includeNotActionable: false,
   visitStatus: "",
@@ -101,6 +225,8 @@ export function BatchClaimsPanel({
   showReassignedTab = false,
   reassignedCount = 0,
   notActionableCount = 0,
+  canExport = false,
+  exportFileName,
 }: {
   batchId: string;
   canAssign: boolean;
@@ -126,6 +252,14 @@ export function BatchClaimsPanel({
   reassignedCount?: number;
   /** How many claims the default exclusion is holding back, for the hint. */
   notActionableCount?: number;
+  /**
+   * Owner and PM only. A biller's list is already their own work, but a file
+   * of patient names leaves the building, so the button is theirs alone — and
+   * the route enforces the same rule rather than trusting this.
+   */
+  canExport?: boolean;
+  /** "[practice]-[month-year]-claims-[today].csv", built by the page. */
+  exportFileName?: string;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -174,6 +308,55 @@ export function BatchClaimsPanel({
     isBoolean,
   );
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  /**
+   * Which status labels the category filter currently permits.
+   *
+   * Choosing "Red" and then leaving "Paid & Posted" ticked would be a filter
+   * that matches nothing, so the labels outside the chosen categories are
+   * greyed out — and, below, dropped from what is actually sent. They stay
+   * visible rather than disappearing: an option that vanishes leaves somebody
+   * hunting for it.
+   */
+  const allowedLabels = useMemo(() => {
+    if (filters.statusCategories.length === 0) return null;
+
+    return new Set<string>(
+      ALL_STATUSES.filter((label) =>
+        filters.statusCategories.includes(statusLabelToCategory(label)),
+      ),
+    );
+  }, [filters.statusCategories]);
+
+  /**
+   * The labels actually applied — the selection narrowed to what the category
+   * filter allows. Derived rather than written back into the URL, so widening
+   * the categories again restores the labels the person had chosen instead of
+   * having silently discarded them.
+   */
+  const visibleStatusLabels = useMemo(
+    () =>
+      allowedLabels === null
+        ? filters.statusLabels
+        : filters.statusLabels.filter((label) => allowedLabels.has(label)),
+    [allowedLabels, filters.statusLabels],
+  );
+
+  const statusLabelOptions = useMemo(
+    () =>
+      ALL_STATUSES.map((label) => {
+        const category = statusLabelToCategory(label);
+
+        return {
+          label,
+          value: label,
+          group: CATEGORY_GROUP[category],
+          disabled: allowedLabels !== null && !allowedLabels.has(label),
+        };
+      }),
+    [allowedLabels],
+  );
 
   /**
    * Page size is remembered per browser, but a URL that names one wins: a
@@ -237,6 +420,12 @@ export function BatchClaimsPanel({
     if (filters.includeNotActionable) {
       params.set("includeNotActionable", "true");
     }
+    if (filters.statusCategories.length > 0) {
+      params.set("statusCategories", filters.statusCategories.join(","));
+    }
+    if (visibleStatusLabels.length > 0) {
+      params.set("statusLabels", visibleStatusLabels.join(","));
+    }
     if (filters.visitStatus) params.set("visitStatus", filters.visitStatus);
     if (filters.dosFrom) params.set("dosFrom", filters.dosFrom);
     if (filters.dosTo) params.set("dosTo", filters.dosTo);
@@ -255,6 +444,8 @@ export function BatchClaimsPanel({
     filters.provider,
     filters.assignedTo,
     filters.includeNotActionable,
+    filters.statusCategories,
+    visibleStatusLabels,
     filters.visitStatus,
     filters.dosFrom,
     filters.dosTo,
@@ -385,6 +576,58 @@ export function BatchClaimsPanel({
     setAssignTo(claim.reassignment?.reassignedById ?? "");
     // The assign controls live in the filter bar above the table.
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /**
+   * Everything the filters currently match, as a file.
+   *
+   * Deliberately not "the rows on screen": a page of fifty is never what
+   * somebody wants to work with in a spreadsheet. The same query string the
+   * table was built from goes to the export route, minus the paging, so the
+   * file is the table's contents by construction.
+   */
+  async function handleExport() {
+    setExporting(true);
+
+    try {
+      const params = new URLSearchParams(query);
+      params.delete("page");
+      params.delete("pageSize");
+
+      const response = await fetch(`/api/ar/claims/export?${params}`);
+      const payload = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        toast(payload?.error ?? "Could not export these claims.", "error");
+        return;
+      }
+
+      if (payload.total === 0) {
+        toast("No claims match the current filters", "error");
+        return;
+      }
+
+      // Above the cap the file would be a database dump rather than something
+      // anyone opens, so the choice is theirs to make knowingly.
+      if (
+        payload.truncated &&
+        !window.confirm(
+          `This export contains ${payload.total} claims. Only the first ${payload.limit} will be exported. Continue?`,
+        )
+      ) {
+        return;
+      }
+
+      downloadCsv(
+        exportFileName ?? "ar-claims.csv",
+        EXPORT_COLUMNS,
+        payload.data.map(exportRow),
+      );
+    } catch {
+      toast("Could not export these claims. Check your connection.", "error");
+    } finally {
+      setExporting(false);
+    }
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -522,6 +765,36 @@ export function BatchClaimsPanel({
           className="w-auto min-w-[200px]"
         />
 
+        <MultiSelectDropdown
+          options={CATEGORY_OPTIONS.map((option) => ({
+            label: option.label,
+            value: option.value,
+            prefix: (
+              <span
+                className={`h-2.5 w-2.5 shrink-0 rounded-full ${option.dot}`}
+              />
+            ),
+          }))}
+          selected={filters.statusCategories}
+          onChange={(next) => setFilters({ statusCategories: next })}
+          placeholder="All categories"
+          allLabel="All Categories"
+          noun="categories"
+          aria-label="Status category"
+          className="w-auto min-w-[210px]"
+        />
+
+        <MultiSelectDropdown
+          options={statusLabelOptions}
+          selected={visibleStatusLabels}
+          onChange={(next) => setFilters({ statusLabels: next })}
+          placeholder="All statuses"
+          allLabel="All Statuses"
+          noun="statuses"
+          aria-label="Status label"
+          className="w-auto min-w-[200px]"
+        />
+
         {/*
           "Unassigned" sits at the top of the same list as the people, because
           "who is this with?" is one question and nobody is a valid answer to
@@ -633,6 +906,21 @@ export function BatchClaimsPanel({
             onClick={clearFilters}
           >
             Clear all filters
+          </Button>
+        ) : null}
+
+        {/*
+          Owner and PM only. The route refuses a biller regardless — this
+          just keeps a control they cannot use off their screen.
+        */}
+        {canExport ? (
+          <Button
+            variant="secondary"
+            className="px-3 py-2 text-xs"
+            onClick={handleExport}
+            disabled={exporting || loading}
+          >
+            {exporting ? "Exporting…" : "Export"}
           </Button>
         ) : null}
 

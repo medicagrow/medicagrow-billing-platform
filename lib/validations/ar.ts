@@ -115,6 +115,22 @@ export const listClaimsQuerySchema = z.object({
   includeNotActionable: z.enum(["true", "false"]).optional(),
   statusCategory: z.enum(StatusCategory).optional(),
   statusLabel: z.string().optional(),
+  /**
+   * The multi-selects. Kept separate from the singular forms above, which the
+   * batch page's tabs still use — the two narrow each other rather than one
+   * overwriting the other.
+   *
+   * Unrecognised entries are dropped rather than rejected: a status renamed in
+   * a later release would otherwise 400 every bookmarked filter that named it.
+   */
+  statusCategories: csvList.transform((values) =>
+    values?.filter((value): value is StatusCategory =>
+      (Object.values(StatusCategory) as string[]).includes(value),
+    ),
+  ),
+  statusLabels: csvList.transform((values) =>
+    values?.filter((value) => (ALL_STATUSES as string[]).includes(value)),
+  ),
   /** Kept for callers still passing one name as a substring match. */
   insuranceName: z.string().optional(),
   /** Exact matches, any of which qualifies. */

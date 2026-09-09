@@ -6,6 +6,20 @@ import { cn } from "@/lib/utils";
 export interface MultiSelectOption {
   label: string;
   value: string;
+  /**
+   * Options sharing a group are listed together under its heading. Only the
+   * first option of each group prints one, so the caller controls the order by
+   * ordering the options.
+   */
+  group?: string;
+  /**
+   * Off-limits under the current state of some other filter — shown, so the
+   * person can see it exists and why it is unavailable, rather than
+   * disappearing and leaving them wondering where it went.
+   */
+  disabled?: boolean;
+  /** A colour swatch or badge rendered before the label. */
+  prefix?: React.ReactNode;
 }
 
 /**
@@ -65,7 +79,10 @@ export function MultiSelectDropdown({
     };
   }, [open]);
 
-  const allSelected = options.length > 0 && selected.length === options.length;
+  const selectable = options.filter((option) => !option.disabled);
+
+  const allSelected =
+    selectable.length > 0 && selected.length === selectable.length;
 
   const summary =
     selected.length === 0 || allSelected
@@ -127,7 +144,7 @@ export function MultiSelectDropdown({
                 type="button"
                 onClick={() =>
                   onChange(
-                    allSelected ? [] : options.map((option) => option.value),
+                    allSelected ? [] : selectable.map((option) => option.value),
                   )
                 }
                 className="flex w-full items-center gap-2 border-b border-slate-100 px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -142,25 +159,49 @@ export function MultiSelectDropdown({
                 {allSelected ? `Deselect all` : allLabel}
               </button>
 
-              {options.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="option"
-                  aria-selected={selected.includes(option.value)}
-                  onClick={() => toggle(option.value)}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(option.value)}
-                    readOnly
-                    tabIndex={-1}
-                    className="h-4 w-4 rounded border-slate-300"
-                  />
-                  <span className="truncate">{option.label}</span>
-                </button>
-              ))}
+              {options.map((option, index) => {
+                // Only the first option of a run prints its heading, so the
+                // caller decides grouping by ordering the list.
+                const startsGroup =
+                  option.group !== undefined &&
+                  option.group !== options[index - 1]?.group;
+
+                return (
+                  <div key={option.value}>
+                    {startsGroup ? (
+                      <p className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
+                        {option.group}
+                      </p>
+                    ) : null}
+
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={selected.includes(option.value)}
+                      aria-disabled={option.disabled}
+                      disabled={option.disabled}
+                      onClick={() => toggle(option.value)}
+                      className={cn(
+                        "flex w-full items-center gap-2 px-3 py-2 text-left text-sm",
+                        option.disabled
+                          ? "cursor-not-allowed text-slate-300"
+                          : "text-slate-700 hover:bg-slate-50",
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(option.value)}
+                        readOnly
+                        disabled={option.disabled}
+                        tabIndex={-1}
+                        className="h-4 w-4 rounded border-slate-300"
+                      />
+                      {option.prefix}
+                      <span className="truncate">{option.label}</span>
+                    </button>
+                  </div>
+                );
+              })}
             </>
           )}
         </div>

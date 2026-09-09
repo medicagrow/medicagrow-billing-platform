@@ -156,6 +156,24 @@ export default async function BatchDetailPage({
 
   const daysOpen = daysBetween(batch.uploadedAt, batch.closedAt ?? new Date());
 
+  /**
+   * "holistic-psychiatry-august-2026-claims-2026-08-13.csv" — the practice and
+   * the period the file covers, plus the day it was taken, since the same
+   * batch exported a week apart is two different files.
+   */
+  const slug = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
+  const exportFileName = [
+    slug(batch.practice.name),
+    slug(`${MONTH_NAMES[batch.reportMonth - 1]}-${batch.reportYear}`),
+    "claims",
+    new Date().toISOString().slice(0, 10),
+  ].join("-") + ".csv";
+
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -275,6 +293,8 @@ export default async function BatchDetailPage({
         showReassignedTab={isManager}
         reassignedCount={reassignedToMeCount}
         notActionableCount={stats.notActionableCount}
+        canExport={isManager}
+        exportFileName={exportFileName}
       />
     </div>
   );

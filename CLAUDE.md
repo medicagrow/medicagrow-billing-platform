@@ -520,6 +520,39 @@ round trip for the whole batch rather than one per claim.
   than a sentinel id in `assignedToIds`, because the API has no user by that
   name and a magic string in a list of ids is the kind of thing that later
   gets looked up. The two combine as an OR.
+- **Status filters are two multi-selects**, `statusCategories` and
+  `statusLabels`, both built from `ALL_STATUSES` so the dropdown cannot drift
+  from the canonical list. The labels are grouped under 🔴/🔵/🟢 headings, and
+  choosing categories **greys out** the labels outside them — the greyed ones
+  stay visible, since an option that vanishes leaves somebody hunting for it,
+  and the applied set is derived rather than written back, so widening the
+  categories again restores what was chosen.
+  - Both have a **singular cousin the tabs still use** (`statusCategory`,
+    `statusLabel`), so the plurals go into the `AND: []` array. As top-level
+    keys the object spread would silently drop one of each pair.
+- **The filter reading is one function.** `parseClaimFilters()` and
+  `claimListWhere()` in [lib/ar-claim-filters.ts](lib/ar-claim-filters.ts) are
+  shared by `GET /api/ar/claims` and the export, so "export what I am looking
+  at" is true by construction rather than by two implementations agreeing.
+
+### Exporting a batch
+
+`GET /api/ar/claims/export` — **Owner and PM only**, enforced on the route and
+not merely by hiding the button. A biller's list is already narrowed to their
+own work, but a file of patient names is a different thing from a screen of
+them, and it leaves the building.
+
+- Takes every filter the list takes and returns all matches up to
+  **10,000 rows**, unpaginated. Above that the response says `truncated` and
+  the client asks before writing a partial file; zero matches is a toast, not
+  an empty download.
+- `lastNote` is the most recent work note, joined with `take: 1` inside the
+  include — one query for the page, where a lookup per claim would be ten
+  thousand. It prefers the biller's own `additionalNotes` over the generated
+  text.
+- The client formats the CSV through `downloadCsv()`; columns and the row
+  builder are declared next to each other so a column added to one without the
+  other is a visible mistake rather than a silently shifted spreadsheet.
 - The search box debounces 300 ms — a request per keystroke lets a slow early
   response land after a fast later one.
 - The claim list's free-text box spans **three** fields — patient name, CPT
@@ -712,6 +745,8 @@ npx tsx scripts/cleanup-zz-test-data.ts --confirm  # deletes
 
 Dry run by default, and it refuses outright if the pattern matches half the
 user table — a prefix match is a blunt instrument against a live database.
+**Piping a test run through `head` can cause this**: the closed pipe kills the
+script before its cleanup runs. Pipe to `tail` instead.
 Deletion order is children first, because most relations to `User` are
 required; practices go last and need no unpicking, since nearly everything
 under one cascades. Worth running after any test run that ends in a stack
@@ -819,6 +854,7 @@ npx tsx scripts/test-aging-rollups.ts  # SQL roll-ups match a JS pass
 npx tsx scripts/test-lazy-schedule.ts  # sweep rate limit, per scope
 npx tsx scripts/test-filter-params.ts  # URL filter round trip, foreign params
 npx tsx scripts/test-visit-status.ts   # the filter's options query, on real batches
+npx tsx scripts/test-claim-filters.ts  # status multi-selects, and the export sharing them
 npx tsx scripts/test-my-queue.ts   # queue scoping (needs the dev server)
 npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
 ```
