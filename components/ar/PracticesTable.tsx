@@ -30,7 +30,10 @@ export interface PracticeRow {
   totalBalance: string;
   percentComplete: number;
   daysOpen: number | null;
+  /** Actionable claims only — see `notActionableCount` for the rest. */
   unassignedCount: number;
+  /** The 0–30 day claims every figure on the row leaves out. */
+  notActionableCount: number;
 }
 
 export function PracticesTable({
@@ -139,7 +142,20 @@ export function PracticesTable({
                   )}
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                  {practice.totalClaims || "—"}
+                  {practice.batchId ? practice.totalClaims : "—"}
+                  {/*
+                    The count, balance and completion all leave these out, so
+                    the row says so rather than looking smaller than the batch.
+                  */}
+                  {practice.notActionableCount > 0 ? (
+                    <span
+                      className="block text-[11px] text-slate-400"
+                      title="Claims aged 30 days or less — insurance has not had time to process them, so they are left out of this row's figures."
+                    >
+                      + {practice.notActionableCount} in 0–30 day bucket (not
+                      yet actionable)
+                    </span>
+                  ) : null}
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums text-slate-900">
                   {practice.batchId ? formatUSD(practice.totalBalance) : "—"}

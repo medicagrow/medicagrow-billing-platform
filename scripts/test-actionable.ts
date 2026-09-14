@@ -51,7 +51,7 @@ async function main() {
     ACTIONABLE_WHERE,
     NOT_ACTIONABLE_WHERE,
   } = await import("../lib/ar-actionable");
-  const { batchStats } = await import("../lib/ar-stats");
+  const { batchStats, batchStatsFor } = await import("../lib/ar-stats");
   const { agingBadgeClasses } = await import("../lib/ar-aging");
   const { manuallyReassignedTo, countReassignedToMe } = await import(
     "../lib/ar-reassignment"
@@ -228,6 +228,67 @@ async function main() {
     "unassigned counts only claims that can be handed out",
     stats.unassignedCount === 1,
     `${stats.unassignedCount} — the fresh unassigned claim is not a gap to fill`,
+  );
+
+  /**
+   * The list helper behind the practices page, the batch history and the
+   * dashboard. Those five surfaces each had their own groupBy and all five
+   * missed the rule, so it is pinned here against the same fixtures the
+   * single-batch page is.
+   */
+  console.log("\n=== list stats (practices list, history, dashboard) ===");
+
+  const listed = (await batchStatsFor([batch.id])).get(batch.id)!;
+
+  check(
+    "total claims are actionable only",
+    listed.totalClaims === 4,
+    `${listed.totalClaims} of 9`,
+  );
+  check(
+    "red, blue and green are actionable only",
+    listed.redCount === 2 && listed.blueCount === 1 && listed.greenCount === 1,
+    `red ${listed.redCount} blue ${listed.blueCount} green ${listed.greenCount}`,
+  );
+  check(
+    "completion agrees with the batch page, not with 3 of 9",
+    listed.percentComplete === stats.percentGreen && listed.percentComplete === 25,
+    `${listed.percentComplete}% vs ${stats.percentGreen}%`,
+  );
+  check(
+    "unassigned agrees with the batch page",
+    listed.unassignedCount === stats.unassignedCount,
+    String(listed.unassignedCount),
+  );
+  check(
+    "balance is the actionable claims' balance",
+    listed.totalBalance === "400.00",
+    listed.totalBalance,
+  );
+  check(
+    "the 0–30 remainder is returned, not dropped",
+    listed.notActionableCount === 5 && listed.notActionableBalance === "500.00",
+    `${listed.notActionableCount} claims, ${listed.notActionableBalance}`,
+  );
+
+  const billerView = (
+    await batchStatsFor([batch.id], { assignedToId: biller.id })
+  ).get(batch.id)!;
+
+  check(
+    "a biller's dashboard counts only their own actionable claims",
+    billerView.totalClaims === 2 && billerView.percentComplete === 50,
+    `${billerView.totalClaims} claims, ${billerView.percentComplete}%`,
+  );
+  check(
+    "and their own fresh claims as context",
+    billerView.notActionableCount === 4,
+    String(billerView.notActionableCount),
+  );
+  check(
+    "an unknown batch id comes back empty rather than missing",
+    (await batchStatsFor(["no-such-batch"])).get("no-such-batch")
+      ?.totalClaims === 0,
   );
 
   console.log("\n=== the queue excludes fresh claims ===");

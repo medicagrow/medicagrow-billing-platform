@@ -1,15 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
-import {
-  BatchStatus,
-  Role,
-  StatusCategory,
-} from "@/lib/generated/prisma/enums";
+import { BatchStatus, Role } from "@/lib/generated/prisma/enums";
 import { requireAuth } from "@/lib/api-helpers";
 import { accessiblePracticeIds } from "@/lib/ar-access";
 import { insuranceAgingBreakdown } from "@/lib/ar-insurance-aging";
 import { arBillerActivity, arSummary, billerProgress } from "@/lib/ar-summary";
 import { agingSummary } from "@/lib/ar-aging-summary";
-import { daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
+import { batchStatsFor, daysBetween } from "@/lib/ar-stats";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 
@@ -29,7 +25,6 @@ export async function GET(request: NextRequest) {
   const isBiller = session!.user.role === Role.BILLER;
   const claimScope = isBiller ? { assignedToId: session!.user.id } : {};
 
-  const today = startOfTodayUtc();
   const practiceIds = await accessiblePracticeIds(session!.user);
   const practiceScope = practiceIds === null ? {} : { id: { in: practiceIds } };
 
@@ -83,48 +78,22 @@ export async function GET(request: NextRequest) {
    * those is a trip to Mumbai.
    */
   const [
-    byCategory,
-    unassigned,
-    overdue,
+    statsByBatch,
     aging,
-    ownTotals,
     activity,
     insuranceAging,
     summary,
     progressByBiller,
   ] = await Promise.all([
-      prisma.arClaim.groupBy({
-        by: ["batchId", "statusCategory"],
-        where: { batchId: { in: openBatchIds }, ...claimScope },
-        _count: { _all: true },
-      }),
-      prisma.arClaim.groupBy({
-        by: ["batchId"],
-        where: { batchId: { in: openBatchIds }, assignedToId: null },
-        _count: { _all: true },
-      }),
-      prisma.arClaim.groupBy({
-        by: ["batchId"],
-        where: {
-          batchId: { in: openBatchIds },
-          statusCategory: StatusCategory.RED,
-          followUpDate: { lt: today },
-          ...claimScope,
-        },
-        _count: { _all: true },
-      }),
+      /**
+       * Every per-practice count — red, blue, green, total, balance, overdue,
+       * unassigned — over actionable claims, from the helper the page and the
+       * practices list share. A biller's figures are their own claims.
+       */
+      batchStatsFor(openBatchIds, claimScope),
       // Bucketed by Postgres — this used to fetch every claim and filter
       // the array five times.
       agingSummary({ batchIds: openBatchIds, ...claimScope }),
-      // A biller's batch totals are their own claims, not the batch's.
-      isBiller
-        ? prisma.arClaim.groupBy({
-            by: ["batchId"],
-            where: { batchId: { in: openBatchIds }, ...claimScope },
-            _count: { _all: true },
-            _sum: { balance: true },
-          })
-        : Promise.resolve([]),
       // The panel is about managing a team; a biller has none.
       isBiller
         ? Promise.resolve([])
@@ -137,11 +106,6 @@ export async function GET(request: NextRequest) {
       arSummary({ practiceIds, selectedPracticeId, ...claimScope }),
       billerProgress({ practiceIds, selectedPracticeId }),
     ]);
-
-  const countFor = (batchId: string, category: StatusCategory) =>
-    byCategory.find(
-      (row) => row.batchId === batchId && row.statusCategory === category,
-    )?._count._all ?? 0;
 
   const rows = practices.map((practice) => {
     const batch = practice.arBatches[0];
@@ -163,25 +127,17 @@ export async function GET(request: NextRequest) {
         percentGreen: 0,
         unassignedCount: 0,
         overdueCount: 0,
+        notActionableCount: 0,
         needsAttention: true,
       };
     }
 
-    const greenCount = countFor(batch.id, StatusCategory.GREEN);
-    const redCount = countFor(batch.id, StatusCategory.RED);
-    const blueCount = countFor(batch.id, StatusCategory.BLUE);
+    const stats = statsByBatch.get(batch.id);
 
-    const own = ownTotals.find((row) => row.batchId === batch.id);
-    const totalClaims = isBiller ? (own?._count._all ?? 0) : batch.totalClaims;
-    const totalBalance = isBiller
-      ? (own?._sum.balance?.toString() ?? "0.00")
-      : batch.totalBalance.toString();
-    const overdueCount =
-      overdue.find((row) => row.batchId === batch.id)?._count._all ?? 0;
+    const totalClaims = stats?.totalClaims ?? 0;
+    const overdueCount = stats?.overdueCount ?? 0;
     const daysOpen = daysBetween(batch.uploadedAt, new Date());
 
-    const percentGreen =
-      totalClaims === 0 ? 0 : Math.round((greenCount / totalClaims) * 100);
     const percentOverdue =
       totalClaims === 0 ? 0 : (overdueCount / totalClaims) * 100;
 
@@ -194,21 +150,27 @@ export async function GET(request: NextRequest) {
       reportYear: batch.reportYear,
       daysOpen,
       totalClaims,
-      totalBalance,
-      greenCount,
-      redCount,
-      blueCount,
-      percentGreen,
-      unassignedCount:
-        unassigned.find((row) => row.batchId === batch.id)?._count._all ?? 0,
+      totalBalance: stats?.totalBalance ?? "0.00",
+      greenCount: stats?.greenCount ?? 0,
+      redCount: stats?.redCount ?? 0,
+      blueCount: stats?.blueCount ?? 0,
+      percentGreen: stats?.percentComplete ?? 0,
+      unassignedCount: stats?.unassignedCount ?? 0,
       overdueCount,
+      /** Left out of every figure above; returned so it can be shown. */
+      notActionableCount: stats?.notActionableCount ?? 0,
       // Amber highlight: open too long, or a fifth of the batch overdue.
       needsAttention: daysOpen > 60 || percentOverdue > 20,
     };
   });
 
+  /**
+   * A biller's table lists the practices they hold claims in — fresh ones
+   * included. Filtering on the actionable total alone would hide a practice
+   * from someone whose only claims there are not due yet.
+   */
   const visibleRows = isBiller
-    ? rows.filter((row) => row.totalClaims > 0)
+    ? rows.filter((row) => row.totalClaims + row.notActionableCount > 0)
     : rows;
 
   const buildProductivity = (
@@ -257,6 +219,8 @@ export async function GET(request: NextRequest) {
       totalClaims: summary.totalClaims,
       totalGreenClaims: summary.totalGreenClaims,
       percentComplete: summary.percentComplete,
+      // What the three figures above exclude, for the subtitle.
+      notActionableClaims: summary.notActionableClaims,
     },
     aging,
     insuranceAging: insuranceAging.ALL,

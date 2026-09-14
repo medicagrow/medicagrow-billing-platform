@@ -9,6 +9,7 @@ import {
   zodErrorResponse,
 } from "@/lib/api-helpers";
 import { canAccessPractice, practiceScopeFilter } from "@/lib/ar-access";
+import { batchStatsFor } from "@/lib/ar-stats";
 import {
   ArParseError,
   parseArFileWithReport,
@@ -266,37 +267,41 @@ export async function GET(request: NextRequest) {
     prisma.arBatch.count({ where }),
   ]);
 
-  const greenCounts = await prisma.arClaim.groupBy({
-    by: ["batchId", "statusCategory"],
-    where: { batchId: { in: batches.map((batch) => batch.id) } },
-    _count: { _all: true },
-  });
-
-  const countFor = (batchId: string, category: string) =>
-    greenCounts.find(
-      (row) => row.batchId === batchId && row.statusCategory === category,
-    )?._count._all ?? 0;
+  /**
+   * Every figure over actionable claims, through the helper the practices
+   * page and the dashboard share. `notActionableCount` carries the 0–30 day
+   * remainder so a caller can show it as context rather than lose it.
+   */
+  const statsByBatch = await batchStatsFor(batches.map((batch) => batch.id));
 
   return paginatedResponse(
-    batches.map((batch) => ({
-      id: batch.id,
-      practiceId: batch.practiceId,
-      practiceName: batch.practice.name,
-      ehrSource: batch.ehrSource,
-      reportMonth: batch.reportMonth,
-      reportYear: batch.reportYear,
-      status: batch.status,
-      totalClaims: batch.totalClaims,
-      totalBalance: batch.totalBalance.toString(),
-      uploadedAt: batch.uploadedAt.toISOString(),
-      uploadedByName: batch.uploadedBy.name,
-      closedAt: batch.closedAt?.toISOString() ?? null,
-      closedByName: batch.closedBy?.name ?? null,
-      targetCompletionDate: batch.targetCompletionDate?.toISOString() ?? null,
-      greenCount: countFor(batch.id, "GREEN"),
-      redCount: countFor(batch.id, "RED"),
-      blueCount: countFor(batch.id, "BLUE"),
-    })),
+    batches.map((batch) => {
+      const stats = statsByBatch.get(batch.id);
+
+      return {
+        id: batch.id,
+        practiceId: batch.practiceId,
+        practiceName: batch.practice.name,
+        ehrSource: batch.ehrSource,
+        reportMonth: batch.reportMonth,
+        reportYear: batch.reportYear,
+        status: batch.status,
+        totalClaims: stats?.totalClaims ?? 0,
+        totalBalance: stats?.totalBalance ?? "0.00",
+        uploadedAt: batch.uploadedAt.toISOString(),
+        uploadedByName: batch.uploadedBy.name,
+        closedAt: batch.closedAt?.toISOString() ?? null,
+        closedByName: batch.closedBy?.name ?? null,
+        targetCompletionDate: batch.targetCompletionDate?.toISOString() ?? null,
+        greenCount: stats?.greenCount ?? 0,
+        redCount: stats?.redCount ?? 0,
+        blueCount: stats?.blueCount ?? 0,
+        percentComplete: stats?.percentComplete ?? 0,
+        unassignedCount: stats?.unassignedCount ?? 0,
+        notActionableCount: stats?.notActionableCount ?? 0,
+        notActionableBalance: stats?.notActionableBalance ?? "0.00",
+      };
+    }),
     total,
     pagination,
   );

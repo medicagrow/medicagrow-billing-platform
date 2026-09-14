@@ -12,13 +12,9 @@ import { toDateParam } from "@/lib/productivity/date-ranges";
 import { insuranceAgingBreakdown } from "@/lib/ar-insurance-aging";
 import { agingSummary } from "@/lib/ar-aging-summary";
 import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
-import { daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
+import { batchStatsFor, daysBetween, startOfTodayUtc } from "@/lib/ar-stats";
 import { formatUSD } from "@/lib/format";
-import {
-  BatchStatus,
-  Role,
-  StatusCategory,
-} from "@/lib/generated/prisma/enums";
+import { BatchStatus, Role } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 
@@ -130,43 +126,22 @@ export default async function ArDashboardPage({
    * three round trips waiting where one would do.
    */
   const [
-    byCategory,
-    overdueGroups,
+    statsByBatch,
     aging,
-    ownTotals,
     productivity,
     insuranceAging,
     summary,
     progressByBiller,
   ] = await Promise.all([
-    prisma.arClaim.groupBy({
-      by: ["batchId", "statusCategory"],
-      where: { batchId: { in: openBatchIds }, ...claimScope },
-      _count: { _all: true },
-    }),
-    prisma.arClaim.groupBy({
-      by: ["batchId"],
-      where: {
-        batchId: { in: openBatchIds },
-        statusCategory: StatusCategory.RED,
-        followUpDate: { lt: today },
-        ...claimScope,
-      },
-      _count: { _all: true },
-    }),
+    /**
+     * The table's per-practice figures, over actionable claims — the same
+     * helper `/api/ar/dashboard` and the practices list use. A biller's
+     * figures are their own claims, not the batch's.
+     */
+    batchStatsFor(openBatchIds, claimScope),
     // Bucketed by Postgres — this used to fetch every claim in every open
     // batch and filter the array five times.
     agingSummary({ batchIds: openBatchIds, ...claimScope }),
-    // A biller's batch totals are their own claims, not the batch's — the
-    // batch columns count work that was never theirs.
-    isBiller
-      ? prisma.arClaim.groupBy({
-          by: ["batchId"],
-          where: { batchId: { in: openBatchIds }, ...claimScope },
-          _count: { _all: true },
-          _sum: { balance: true },
-        })
-      : Promise.resolve([]),
     // Same helper the API route uses, so the page and /api/ar/dashboard
     // cannot disagree — and both are scoped to this user's practices.
     isBiller
@@ -185,14 +160,6 @@ export default async function ArDashboardPage({
     billerProgress({ practiceIds, selectedPracticeId }),
   ]);
 
-  const ownTotalFor = (batchId: string) =>
-    ownTotals.find((row) => row.batchId === batchId);
-
-  const countFor = (batchId: string, category: StatusCategory) =>
-    byCategory.find(
-      (row) => row.batchId === batchId && row.statusCategory === category,
-    )?._count._all ?? 0;
-
   const rows = practices.map((practice) => {
     const batch = practice.arBatches[0];
 
@@ -205,41 +172,48 @@ export default async function ArDashboardPage({
         blueCount: 0,
         overdueCount: 0,
         percentGreen: 0,
+        notActionableCount: 0,
         daysOpen: 0,
         needsAttention: true,
       };
     }
 
-    const greenCount = countFor(batch.id, StatusCategory.GREEN);
-    const overdueCount =
-      overdueGroups.find((row) => row.batchId === batch.id)?._count._all ?? 0;
-    const daysOpen = daysBetween(batch.uploadedAt, new Date());
+    const stats = statsByBatch.get(batch.id);
 
-    const own = ownTotalFor(batch.id);
-    const totalClaims = isBiller ? (own?._count._all ?? 0) : batch.totalClaims;
-    const totalBalance = isBiller
-      ? (own?._sum.balance?.toString() ?? "0.00")
-      : batch.totalBalance.toString();
+    const totalClaims = stats?.totalClaims ?? 0;
+    const overdueCount = stats?.overdueCount ?? 0;
+    const daysOpen = daysBetween(batch.uploadedAt, new Date());
 
     const percentOverdue =
       totalClaims === 0 ? 0 : (overdueCount / totalClaims) * 100;
 
     return {
       practice,
-      batch: { ...batch, totalClaims, totalBalance },
-      greenCount,
-      redCount: countFor(batch.id, StatusCategory.RED),
-      blueCount: countFor(batch.id, StatusCategory.BLUE),
+      batch: {
+        ...batch,
+        totalClaims,
+        totalBalance: stats?.totalBalance ?? "0.00",
+      },
+      greenCount: stats?.greenCount ?? 0,
+      redCount: stats?.redCount ?? 0,
+      blueCount: stats?.blueCount ?? 0,
       overdueCount,
-      percentGreen:
-        totalClaims === 0 ? 0 : Math.round((greenCount / totalClaims) * 100),
+      percentGreen: stats?.percentComplete ?? 0,
+      notActionableCount: stats?.notActionableCount ?? 0,
       daysOpen,
       needsAttention: daysOpen > 60 || percentOverdue > 20,
     };
   })
-  // A biller's cross-practice table lists the practices they actually hold
-  // claims in, not every practice with an open batch.
-  .filter((row) => !isBiller || (row.batch?.totalClaims ?? 0) > 0);
+  /**
+   * A biller's table lists the practices they hold claims in — fresh ones
+   * included, or a practice where all their claims are under 30 days would
+   * vanish from their own dashboard.
+   */
+  .filter(
+    (row) =>
+      !isBiller ||
+      (row.batch?.totalClaims ?? 0) + row.notActionableCount > 0,
+  );
 
   // Balance, red and overdue now come from `arSummary` — see the cards below.
   // What is left is the one figure it does not answer: practices with no open
@@ -335,6 +309,17 @@ export default async function ArDashboardPage({
           </p>
         </div>
         <ProgressBar percent={summary.percentComplete} size="lg" />
+        {/*
+          Both halves of the percentage leave out fresh claims. Saying so keeps
+          the bar from looking wrong to anyone who divides by the batch total.
+        */}
+        {summary.notActionableClaims > 0 ? (
+          <p className="mt-2 text-xs text-slate-500">
+            {summary.notActionableClaims} claim
+            {summary.notActionableClaims === 1 ? "" : "s"} in 0–
+            {NOT_ACTIONABLE_MAX_DAYS} day bucket excluded
+          </p>
+        ) : null}
       </div>
 
       {rows.length === 0 ? (
@@ -405,6 +390,14 @@ export default async function ArDashboardPage({
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-slate-700">
                     {row.batch?.totalClaims ?? "—"}
+                    {row.batch && row.notActionableCount > 0 ? (
+                      <span
+                        className="block text-[11px] text-slate-400"
+                        title="Claims aged 30 days or less, left out of this row's counts and completion."
+                      >
+                        + {row.notActionableCount} in 0–30
+                      </span>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-slate-900">
                     {row.batch

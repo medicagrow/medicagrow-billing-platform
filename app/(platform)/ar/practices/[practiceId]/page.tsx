@@ -5,7 +5,8 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/Card";
 import { canAccessPractice } from "@/lib/ar-access";
-import { BatchStatus, StatusCategory } from "@/lib/generated/prisma/enums";
+import { batchStatsFor } from "@/lib/ar-stats";
+import { BatchStatus } from "@/lib/generated/prisma/enums";
 import { EHR_SOURCE_LABELS } from "@/lib/ehr-labels";
 import { formatDate, formatUSD } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
@@ -47,14 +48,9 @@ export default async function PracticeBatchHistoryPage({
     },
   });
 
-  const greenCounts = await prisma.arClaim.groupBy({
-    by: ["batchId"],
-    where: {
-      batchId: { in: batches.map((batch) => batch.id) },
-      statusCategory: StatusCategory.GREEN,
-    },
-    _count: { _all: true },
-  });
+  // The same actionable-only figures the practices list shows, so the two
+  // pages cannot report different completion for the same batch.
+  const statsByBatch = await batchStatsFor(batches.map((batch) => batch.id));
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -93,13 +89,7 @@ export default async function PracticeBatchHistoryPage({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {batches.map((batch) => {
-                const green =
-                  greenCounts.find((row) => row.batchId === batch.id)?._count
-                    ._all ?? 0;
-                const percent =
-                  batch.totalClaims === 0
-                    ? 0
-                    : Math.round((green / batch.totalClaims) * 100);
+                const stats = statsByBatch.get(batch.id);
 
                 return (
                   <tr key={batch.id} className="hover:bg-slate-50">
@@ -126,13 +116,21 @@ export default async function PracticeBatchHistoryPage({
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                      {batch.totalClaims}
+                      {stats?.totalClaims ?? 0}
+                      {stats && stats.notActionableCount > 0 ? (
+                        <span
+                          className="block text-[11px] text-slate-400"
+                          title="Claims aged 30 days or less, left out of this row's figures."
+                        >
+                          + {stats.notActionableCount} in 0–30 day bucket
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-900">
-                      {formatUSD(batch.totalBalance.toString())}
+                      {formatUSD(stats?.totalBalance ?? "0.00")}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums text-slate-700">
-                      {percent}%
+                      {stats?.percentComplete ?? 0}%
                     </td>
                     <td className="px-4 py-3 text-slate-600">
                       {batch.uploadedBy.name}

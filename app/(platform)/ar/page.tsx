@@ -6,11 +6,8 @@ import {
   type PracticeRow,
 } from "@/components/ar/PracticesTable";
 import { accessiblePracticeIds, canManageBatches } from "@/lib/ar-access";
-import { daysBetween } from "@/lib/ar-stats";
-import {
-  BatchStatus,
-  StatusCategory,
-} from "@/lib/generated/prisma/enums";
+import { batchStatsFor, daysBetween } from "@/lib/ar-stats";
+import { BatchStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 
@@ -70,21 +67,13 @@ export default async function ArHomePage({
     .map((practice) => practice.arBatches[0]?.id)
     .filter((id): id is string => Boolean(id));
 
-  const [greenCounts, unassignedCounts] = await Promise.all([
-    prisma.arClaim.groupBy({
-      by: ["batchId"],
-      where: {
-        batchId: { in: batchIds },
-        statusCategory: StatusCategory.GREEN,
-      },
-      _count: { _all: true },
-    }),
-    prisma.arClaim.groupBy({
-      by: ["batchId"],
-      where: { batchId: { in: batchIds }, assignedToId: null },
-      _count: { _all: true },
-    }),
-  ]);
+  /**
+   * Claims, balance, completion and unassigned — all over actionable claims,
+   * through the same helper the dashboard uses. This page used to count the
+   * whole upload, so a batch of fresh claims read as 0% complete with a wall
+   * of "unassigned" nobody was allowed to hand out.
+   */
+  const statsByBatch = await batchStatsFor(batchIds);
 
   const rows: PracticeRow[] = practices.map((practice) => {
     const batch = practice.arBatches[0];
@@ -103,11 +92,11 @@ export default async function ArHomePage({
         percentComplete: 0,
         daysOpen: null,
         unassignedCount: 0,
+        notActionableCount: 0,
       };
     }
 
-    const green =
-      greenCounts.find((row) => row.batchId === batch.id)?._count._all ?? 0;
+    const stats = statsByBatch.get(batch.id);
 
     return {
       id: practice.id,
@@ -117,21 +106,17 @@ export default async function ArHomePage({
       reportMonth: batch.reportMonth,
       reportYear: batch.reportYear,
       status: batch.status,
-      totalClaims: batch.totalClaims,
-      totalBalance: batch.totalBalance.toString(),
-      percentComplete:
-        batch.totalClaims === 0
-          ? 0
-          : Math.round((green / batch.totalClaims) * 100),
+      totalClaims: stats?.totalClaims ?? 0,
+      totalBalance: stats?.totalBalance ?? "0.00",
+      percentComplete: stats?.percentComplete ?? 0,
       daysOpen:
         batch.status === BatchStatus.OPEN
           ? daysBetween(batch.uploadedAt, new Date())
           : null,
+      // A closed batch has nothing left to hand out.
       unassignedCount:
-        batch.status === BatchStatus.OPEN
-          ? (unassignedCounts.find((row) => row.batchId === batch.id)?._count
-              ._all ?? 0)
-          : 0,
+        batch.status === BatchStatus.OPEN ? (stats?.unassignedCount ?? 0) : 0,
+      notActionableCount: stats?.notActionableCount ?? 0,
     };
   });
 

@@ -1,5 +1,6 @@
 import { BatchStatus, StatusCategory } from "@/lib/generated/prisma/enums";
 import { ACTIONABLE_WHERE, NOT_ACTIONABLE_WHERE } from "@/lib/ar-actionable";
+import { centsToDecimalString, toCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
 
 export interface BatchStats {
@@ -126,6 +127,162 @@ export async function batchStats(batchId: string): Promise<BatchStats> {
     notActionableCount,
     actionableClaims,
   };
+}
+
+/**
+ * Per-batch figures for a **list** of batches, all over actionable claims.
+ *
+ * `batchStats()` above serves one batch page. This serves every surface that
+ * shows many batches at once — the practices list, the batch history, the AR
+ * dashboard table and both APIs behind them. The 0–30 day rule was applied to
+ * the single-batch page and missed on all five of those, because each had its
+ * own `groupBy` and each needed remembering separately. One function means the
+ * rule is applied once.
+ *
+ * Four grouped queries whatever the number of batches — never one per batch.
+ *
+ * Everything is actionable-only **except** `notActionableCount` and
+ * `notActionableBalance`, which exist so a page can say what it left out
+ * rather than quietly showing a smaller number than the batch page does.
+ */
+export interface ListBatchStats {
+  /** Claims aged past 30 days. */
+  totalClaims: number;
+  totalBalance: string;
+  greenCount: number;
+  redCount: number;
+  blueCount: number;
+  unassignedCount: number;
+  overdueCount: number;
+  /** green ÷ total, both actionable. */
+  percentComplete: number;
+  notActionableCount: number;
+  notActionableBalance: string;
+}
+
+const EMPTY_LIST_STATS: ListBatchStats = {
+  totalClaims: 0,
+  totalBalance: "0.00",
+  greenCount: 0,
+  redCount: 0,
+  blueCount: 0,
+  unassignedCount: 0,
+  overdueCount: 0,
+  percentComplete: 0,
+  notActionableCount: 0,
+  notActionableBalance: "0.00",
+};
+
+export async function batchStatsFor(
+  batchIds: string[],
+  options: {
+    /**
+     * Narrows the counts to one person's claims — a biller's dashboard is
+     * their own book. Not applied to `unassignedCount`: an unassigned claim
+     * is by definition nobody's, so scoping it to a biller would always be 0.
+     */
+    assignedToId?: string;
+  } = {},
+): Promise<Map<string, ListBatchStats>> {
+  const stats = new Map<string, ListBatchStats>();
+
+  if (batchIds.length === 0) return stats;
+
+  const today = startOfTodayUtc();
+  const scope = options.assignedToId
+    ? { assignedToId: options.assignedToId }
+    : {};
+
+  const inBatches = { batchId: { in: batchIds } };
+
+  const [byCategory, unassigned, overdue, notActionable] = await Promise.all([
+    // Counts and balance per status, actionable only — the totals are the sum.
+    prisma.arClaim.groupBy({
+      by: ["batchId", "statusCategory"],
+      where: { ...inBatches, ...scope, ...ACTIONABLE_WHERE },
+      _count: { _all: true },
+      _sum: { balance: true },
+    }),
+    /**
+     * A call to action — "these need giving to somebody" — so it counts only
+     * what can be worked. A fresh batch would otherwise wear a permanent amber
+     * badge nobody is able to clear.
+     */
+    prisma.arClaim.groupBy({
+      by: ["batchId"],
+      where: { ...inBatches, assignedToId: null, ...ACTIONABLE_WHERE },
+      _count: { _all: true },
+    }),
+    prisma.arClaim.groupBy({
+      by: ["batchId"],
+      where: {
+        ...inBatches,
+        ...scope,
+        ...ACTIONABLE_WHERE,
+        statusCategory: StatusCategory.RED,
+        followUpDate: { lt: today },
+      },
+      _count: { _all: true },
+    }),
+    // The context line: what the figures above deliberately leave out.
+    prisma.arClaim.groupBy({
+      by: ["batchId"],
+      where: { ...inBatches, ...scope, ...NOT_ACTIONABLE_WHERE },
+      _count: { _all: true },
+      _sum: { balance: true },
+    }),
+  ]);
+
+  for (const batchId of batchIds) {
+    stats.set(batchId, { ...EMPTY_LIST_STATS });
+  }
+
+  // Balance summed in cents, never as floats — these are dollars.
+  const cents = new Map<string, bigint>();
+
+  for (const row of byCategory) {
+    const entry = stats.get(row.batchId);
+    if (!entry) continue;
+
+    const count = row._count._all;
+
+    entry.totalClaims += count;
+    if (row.statusCategory === StatusCategory.GREEN) entry.greenCount += count;
+    if (row.statusCategory === StatusCategory.RED) entry.redCount += count;
+    if (row.statusCategory === StatusCategory.BLUE) entry.blueCount += count;
+
+    cents.set(
+      row.batchId,
+      (cents.get(row.batchId) ?? 0n) + toCents(row._sum.balance?.toString()),
+    );
+  }
+
+  for (const row of unassigned) {
+    const entry = stats.get(row.batchId);
+    if (entry) entry.unassignedCount = row._count._all;
+  }
+
+  for (const row of overdue) {
+    const entry = stats.get(row.batchId);
+    if (entry) entry.overdueCount = row._count._all;
+  }
+
+  for (const row of notActionable) {
+    const entry = stats.get(row.batchId);
+    if (!entry) continue;
+
+    entry.notActionableCount = row._count._all;
+    entry.notActionableBalance = centsToDecimalString(
+      toCents(row._sum.balance?.toString()),
+    );
+  }
+
+  for (const [batchId, entry] of stats) {
+    entry.totalBalance = centsToDecimalString(cents.get(batchId) ?? 0n);
+    entry.percentComplete = percent(entry.greenCount, entry.totalClaims);
+  }
+
+  return stats;
 }
 
 export { BatchStatus };

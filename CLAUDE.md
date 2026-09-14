@@ -468,12 +468,24 @@ act on, and they buried the workable ones. So:
 - `arSummary` and `billerProgress` are narrowed the same way, so the dashboard
   cards, the homepage and `/api/ar/dashboard` agree. The cards read from
   `arSummary` rather than re-summing the practice rows, which would disagree.
+- **Every surface listing many batches goes through `batchStatsFor()`** in
+  [lib/ar-stats.ts](lib/ar-stats.ts): the practices list, the batch history,
+  the dashboard table, and `GET /api/ar/batches` and `/api/ar/dashboard`. Each
+  used to run its own `groupBy`, and all five missed this rule when it was
+  introduced — the single-batch page got it and nothing else did. Four grouped
+  queries whatever the number of batches. It returns `notActionableCount` and
+  `notActionableBalance` beside the narrowed figures, so each row can show
+  "+ N in 0–30 day bucket" rather than looking smaller than the batch page.
+  **If you add a page that counts claims per batch, use it** rather than
+  writing a fifth groupBy.
 - **The aging badge is grey under 30 days, not green** — green reads as
   "healthy, nothing to do", and the truth is "nothing to do *yet*". The batch
   list spells it out with `<AgingBadge withLabel />`.
-- The **insurance aging table still shows the 0–30 bucket in full**: it answers
-  "what is outstanding", not "what can we act on". Both it and the summary
-  cards carry a footnote saying which they are.
+- The **insurance aging table still shows the 0–30 bucket column in full**, per
+  payer and in its own footer cell — it answers "what is outstanding". Only the
+  footer's **Total Claims / Total Balance** cells leave it out, labelled
+  "31+ days", with a footnote saying so; the per-payer total columns still
+  include it, and the footnote says that too.
 
 ### Reassigned to Me
 

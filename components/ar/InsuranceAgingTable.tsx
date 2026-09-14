@@ -293,31 +293,39 @@ export function InsuranceAgingTable({
                     </span>
                   </td>
                 ))}
+                {/*
+                  The summary totals leave the 0–30 bucket out, matching the
+                  cards at the top of the page. The bucket's own column total
+                  stays in the row to its left, so the figure is still visible.
+                */}
                 <td className="px-4 py-3 text-right tabular-nums text-slate-900">
-                  {totals.totalClaims}
+                  {totals.totalClaims - (totals.bucketClaims.bucket0_30 ?? 0)}
+                  <span className="block text-[11px] font-normal text-slate-500">
+                    31+ days
+                  </span>
                 </td>
                 <td className="px-4 py-3 text-right tabular-nums text-slate-900">
-                  {formatUSD(centsToDecimalString(totals.totalCents))}
+                  {formatUSD(
+                    centsToDecimalString(
+                      totals.totalCents - (totals.bucketCents.bucket0_30 ?? 0n),
+                    ),
+                  )}
+                  <span className="block text-[11px] font-normal text-slate-500">
+                    31+ days
+                  </span>
                 </td>
               </tr>
-              {/*
-                This table's totals are the whole book, 0–30 bucket included —
-                the question here is what is outstanding. The summary cards at
-                the top of the page ask a different question and answer it
-                differently, so the difference is stated rather than left to be
-                discovered.
-              */}
               <tr>
                 <td
                   colSpan={BUCKET_COLUMNS.length + 3}
                   className="px-4 pb-3 text-xs font-normal text-slate-500"
                 >
-                  Includes the 0–{NOT_ACTIONABLE_MAX_DAYS} day bucket
+                  Summary row excludes 0–{NOT_ACTIONABLE_MAX_DAYS} day bucket
+                  (not yet actionable)
                   {totals.bucketClaims.bucket0_30
-                    ? ` (${totals.bucketClaims.bucket0_30} claims, ${formatUSD(centsToDecimalString(totals.bucketCents.bucket0_30!))})`
-                    : ""}
-                  . The summary cards above exclude it — those claims are not
-                  yet actionable.
+                    ? ` — ${totals.bucketClaims.bucket0_30} claims, ${formatUSD(centsToDecimalString(totals.bucketCents.bucket0_30!))}, shown in their own column.`
+                    : "."}{" "}
+                  Per-payer totals above still include it.
                 </td>
               </tr>
             </tfoot>
