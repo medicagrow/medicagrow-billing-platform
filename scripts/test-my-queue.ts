@@ -100,7 +100,8 @@ async function makeClaim(
       providerName: "Dr. Test",
       dateOfService: new Date("2026-03-14T00:00:00.000Z"),
       balance: "100.00",
-      agingDays: 30,
+      // Past the 0–30 day bucket, which the queue leaves out by default.
+      agingDays: 45,
       assignedToId: options.assignedToId ?? null,
       statusCategory: options.statusCategory ?? StatusCategory.RED,
       statusLabel: options.statusLabel ?? "Pending",

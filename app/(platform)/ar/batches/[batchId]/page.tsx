@@ -7,6 +7,7 @@ import {
   type TabKey,
 } from "@/components/ar/BatchClaimsPanel";
 import { CloseBatchButton } from "@/components/ar/CloseBatchButton";
+import { PendingApprovalsPanel } from "@/components/ar/PendingApprovalsPanel";
 import { CategoryPills } from "@/components/ar/StatusBadge";
 import { TargetDateEditor } from "@/components/ar/TargetDateEditor";
 import { Badge } from "@/components/ui/Badge";
@@ -101,11 +102,22 @@ export default async function BatchDetailPage({
   const isManager = canManageBatches(user);
   const closed = batch.status === BatchStatus.CLOSED;
 
-  const [stats, reassignedToMeCount] = await Promise.all([
+  const [stats, reassignedToMeCount, pendingApprovalCount] = await Promise.all([
     batchStats(batch.id),
     // Only a manager has people who can hand work back to them.
     isManager
       ? countReassignedToMe(user.id, batch.id)
+      : Promise.resolve(0),
+    // Biller status requests waiting on a manager. A closed batch accepts no
+    // changes, so nothing in it can be waiting.
+    isManager && !closed
+      ? prisma.arStatusRequest.count({
+          where: {
+            batchId: batch.id,
+            // An undecided item, not a status — see GET /api/ar/status-requests.
+            items: { some: { itemStatus: "PENDING" } },
+          },
+        })
       : Promise.resolve(0),
   ]);
 
@@ -198,6 +210,15 @@ export default async function BatchDetailPage({
         </div>
 
         <div className="flex items-center gap-2">
+          {pendingApprovalCount > 0 ? (
+            <a
+              href="#pending-approvals"
+              className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-200 hover:bg-amber-200"
+            >
+              ⏳ {pendingApprovalCount} pending approval
+              {pendingApprovalCount === 1 ? "" : "s"}
+            </a>
+          ) : null}
           <Link
             href={`/ar/practices/${batch.practice.id}`}
             className="text-sm font-medium text-brand-700 hover:text-brand-800"
@@ -280,6 +301,10 @@ export default async function BatchDetailPage({
           ) : null}
         </div>
       </div>
+
+      {isManager && !closed ? (
+        <PendingApprovalsPanel batchId={batch.id} />
+      ) : null}
 
       <BatchClaimsPanel
         batchId={batch.id}

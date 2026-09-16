@@ -81,6 +81,8 @@ model User {
   arClaimsLastWorked  ArClaim[]    @relation("ArClaimLastWorkedBy")
   arWorkNotes         ArWorkNote[] @relation("ArWorkNoteWorkedBy")
   arWorkNotesAssigned ArWorkNote[] @relation("ArWorkNoteAssignedTo")
+  arStatusRequestsMade     ArStatusRequest[] @relation("ArStatusRequestRequestedBy")
+  arStatusRequestsReviewed ArStatusRequest[] @relation("ArStatusRequestReviewedBy")
 
   eobBatchesPosted     EobBatch[]    @relation("EobBatchPostedBy")
   eobEntriesAssigned   EobEntry[]    @relation("EobEntryAssignedTo")
@@ -233,6 +235,7 @@ model ArBatch {
   uploadedBy User      @relation("ArBatchUploadedBy", fields: [uploadedById], references: [id])
   closedBy   User?     @relation("ArBatchClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
   claims     ArClaim[]
+  statusRequests ArStatusRequest[]
 
   @@index([practiceId, status])
   @@index([status])
@@ -291,6 +294,13 @@ model ArClaim {
   assignedTo   User?        @relation("ArClaimAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
   lastWorkedBy User?        @relation("ArClaimLastWorkedBy", fields: [lastWorkedById], references: [id], onDelete: SetNull)
   workNotes    ArWorkNote[]
+
+  /// The open status-change request covering this claim, if any. Set when a
+  /// biller submits one and cleared when it is decided, so a second request
+  /// for the same claim can be refused rather than queued behind the first.
+  pendingStatusRequestId String?
+  pendingStatusRequest   ArStatusRequest?      @relation("ArClaimPendingRequest", fields: [pendingStatusRequestId], references: [id], onDelete: SetNull)
+  statusRequestItems     ArStatusRequestItem[]
 
   @@index([batchId])
   /// The claim list's default read: one batch, oldest first. Without the
@@ -981,4 +991,64 @@ model AnalyticsFlagDismissal {
 
   @@index([flagType])
   @@map("analytics_flag_dismissals")
+}
+
+/// A biller's request to change the status of one or more claims.
+///
+/// A status is the claim's position in the workflow, and the quick-update form
+/// skips the structured outcome a full note records — so for billers it goes
+/// through a manager first. The claims live in `ArStatusRequestItem`, one row
+/// each, because a manager decides them **individually**: approving 18 of 20
+/// is the common case, and a single status on the request could not say so.
+model ArStatusRequest {
+  id                String                @id @default(cuid())
+  batchId           String
+  requestedById     String
+  requestedStatus   String
+  requestedCategory StatusCategory
+  note              String
+  status            ArStatusRequestStatus @default(PENDING)
+  reviewedById      String?
+  reviewedAt        DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  batch       ArBatch               @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  requestedBy User                  @relation("ArStatusRequestRequestedBy", fields: [requestedById], references: [id])
+  reviewedBy  User?                 @relation("ArStatusRequestReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  items       ArStatusRequestItem[]
+  pendingOn   ArClaim[]             @relation("ArClaimPendingRequest")
+
+  @@index([batchId, status])
+  @@index([requestedById])
+  @@map("ar_status_requests")
+}
+
+model ArStatusRequestItem {
+  id            String                    @id @default(cuid())
+  requestId     String
+  claimId       String
+  itemStatus    ArStatusRequestItemStatus @default(PENDING)
+  reviewedAt    DateTime?
+  rejectionNote String?
+
+  request ArStatusRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  claim   ArClaim         @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, claimId])
+  @@index([claimId])
+  @@map("ar_status_request_items")
+}
+
+enum ArStatusRequestStatus {
+  PENDING
+  PARTIALLY_APPROVED
+  APPROVED
+  REJECTED
+}
+
+enum ArStatusRequestItemStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }

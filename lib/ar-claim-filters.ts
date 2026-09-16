@@ -2,6 +2,7 @@ import { Role, StatusCategory } from "@/lib/generated/prisma/enums";
 import { ACTIONABLE_WHERE, NOT_ACTIONABLE_BUCKET } from "@/lib/ar-actionable";
 import { agingBucketFilter } from "@/lib/ar-aging";
 import { manuallyReassignedTo } from "@/lib/ar-reassignment";
+import { alertClaimWhere, loadAlertContext } from "@/lib/ar/smart-alerts";
 import { listClaimsQuerySchema } from "@/lib/validations/ar";
 import type { Prisma } from "@/lib/generated/prisma/client";
 
@@ -44,6 +45,9 @@ export function parseClaimFilters(searchParams: URLSearchParams) {
     includeUnassigned: searchParams.get("includeUnassigned") ?? undefined,
     reassignedToMe: searchParams.get("reassignedToMe") ?? undefined,
     includeNotActionable: searchParams.get("includeNotActionable") ?? undefined,
+    howChecked: searchParams.get("howChecked") || undefined,
+    alert: searchParams.get("alert") || undefined,
+    alertKey: searchParams.get("alertKey") || undefined,
   });
 }
 
@@ -159,6 +163,33 @@ export async function claimListWhere(
       assignedToId: user.id,
       OR: [{ statusCategory: StatusCategory.BLUE }, { id: { in: claimIds } }],
     });
+  }
+
+  if (filters.howChecked) {
+    anyOf.push({
+      workNotes: {
+        some: {
+          structuredFields: { path: ["howChecked"], equals: filters.howChecked },
+        },
+      },
+    });
+  }
+
+  /**
+   * A Smart Alert's claims. The detector owns the condition, so the list and
+   * the alert's count cannot disagree about which claims it means.
+   */
+  if (filters.alert) {
+    const context = await loadAlertContext(
+      filters.batchId,
+      user.role === Role.BILLER ? user.id : undefined,
+    );
+
+    anyOf.push(
+      context
+        ? await alertClaimWhere(filters.alert, filters.alertKey ?? null, context)
+        : { id: { in: [] } },
+    );
   }
 
   /**

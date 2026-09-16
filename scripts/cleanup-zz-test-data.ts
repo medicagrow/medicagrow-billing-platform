@@ -265,6 +265,19 @@ async function main() {
 
   /* ------------------------------ AR ------------------------------------ */
 
+  // A request points at its requester (required), so it goes before the user.
+  // Its items cascade with it.
+  await step("AR status requests", () =>
+    prisma.arStatusRequest.deleteMany({
+      where: {
+        OR: [
+          { requestedById: { in: userIds } },
+          { batch: { practiceId: { in: practiceIds } } },
+        ],
+      },
+    }),
+  );
+
   await step("AR work notes", () =>
     prisma.arWorkNote.deleteMany({ where: { workedById: { in: userIds } } }),
   );

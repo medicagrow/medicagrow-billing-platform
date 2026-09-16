@@ -202,3 +202,78 @@ async function upsertDenialReason(reason: string) {
     }
   }
 }
+
+/** Enough for the inline panel's "last few"; the claim page shows the rest. */
+const MAX_NOTES = 50;
+
+/**
+ * GET /api/ar/work-notes?claimId=&limit= — a claim's most recent notes.
+ *
+ * Exists for the batch list's inline panel, which needs the last few notes and
+ * a count, and not the provider matching and prior history the claim detail
+ * route does on every load. Read-only, so it sits comfortably on an add-only
+ * resource.
+ */
+export async function GET(request: NextRequest) {
+  const session = await getSession();
+
+  const denied = requireAuth(session);
+  if (denied) return denied;
+
+  const claimId = request.nextUrl.searchParams.get("claimId");
+  if (!claimId) return apiErrorResponse("claimId is required.", 400);
+
+  const requested = Number(request.nextUrl.searchParams.get("limit") ?? 3);
+  const limit =
+    Number.isFinite(requested) && requested > 0
+      ? Math.min(Math.floor(requested), MAX_NOTES)
+      : 3;
+
+  const claim = await prisma.arClaim.findUnique({
+    where: { id: claimId },
+    select: { batchId: true, assignedToId: true },
+  });
+
+  if (!claim || !(await canAccessBatch(session!.user, claim.batchId))) {
+    return apiErrorResponse("Claim not found.", 404);
+  }
+
+  // Billers see the history of their own claims only, as everywhere else.
+  if (
+    session!.user.role === Role.BILLER &&
+    claim.assignedToId !== session!.user.id
+  ) {
+    return apiErrorResponse("Claim not found.", 404);
+  }
+
+  const [notes, total] = await Promise.all([
+    prisma.arWorkNote.findMany({
+      where: { claimId },
+      orderBy: { workedAt: "desc" },
+      take: limit,
+      select: {
+        id: true,
+        workedAt: true,
+        generatedNote: true,
+        additionalNotes: true,
+        statusChangedTo: true,
+        statusCategoryChangedTo: true,
+        workedBy: { select: { name: true } },
+      },
+    }),
+    prisma.arWorkNote.count({ where: { claimId } }),
+  ]);
+
+  return NextResponse.json({
+    total,
+    data: notes.map((note) => ({
+      id: note.id,
+      workedAt: note.workedAt.toISOString(),
+      workedByName: note.workedBy.name,
+      generatedNote: note.generatedNote,
+      additionalNotes: note.additionalNotes,
+      statusChangedTo: note.statusChangedTo,
+      statusCategoryChangedTo: note.statusCategoryChangedTo,
+    })),
+  });
+}

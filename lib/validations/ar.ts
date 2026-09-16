@@ -156,6 +156,28 @@ export const listClaimsQuerySchema = z.object({
   /** Free text over patient name, CPT code and visit id. */
   search: z.string().trim().max(100).optional(),
   overdue: z.enum(["true", "false"]).optional(),
+  /**
+   * Claims with at least one work note checked this way. Read from the note
+   * history, since how a claim was checked is recorded per call, not per claim.
+   */
+  howChecked: z.enum(["Portal", "IVR", "Phone"]).optional(),
+  /**
+   * A Smart Alert's own claim condition — "view affected claims". The detector
+   * supplies the condition, so the list shows exactly the claims it counted.
+   */
+  alert: z
+    .enum([
+      "TIMELY_FILING",
+      "PACE",
+      "SYSTEMATIC_DENIAL",
+      "FORGOTTEN_IN_PROCESS",
+      "UNACTIONED_BLUE",
+      "HIGH_BALANCE_IDLE",
+      "AGING_WORSENING",
+      "BILLER_IDLE",
+    ])
+    .optional(),
+  alertKey: z.string().max(2000).optional(),
   sort: z
     .enum(["aging", "patientName", "provider", "balance", "status"])
     .optional(),
@@ -209,3 +231,46 @@ export const setTargetDateSchema = z.object({
 });
 
 export { nonNegativeDecimalSchema };
+
+/* ------------------------------ quick updates ------------------------------ */
+
+/** Same ceiling bulk assign uses — one batch page's worth of selection. */
+const MAX_BULK_CLAIMS = 5000;
+
+const claimIdsSchema = z
+  .array(z.string().min(1))
+  .min(1, "Select at least one claim")
+  .max(MAX_BULK_CLAIMS, `No more than ${MAX_BULK_CLAIMS} claims at once`);
+
+/**
+ * A status change without the structured outcome a full note records. The
+ * note is required and not token-length: with no outcome fields, it is the
+ * only record of *why* the status moved.
+ */
+export const quickUpdateSchema = z.object({
+  claimIds: claimIdsSchema,
+  statusLabel: statusLabelSchema,
+  note: z
+    .string()
+    .trim()
+    .min(10, "Say what happened — at least 10 characters")
+    .max(5000),
+});
+
+export const reviewStatusRequestSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        claimId: z.string().min(1),
+        decision: z.enum(["APPROVED", "REJECTED"]),
+        rejectionNote: z.string().trim().max(1000).optional(),
+      }),
+    )
+    .min(1, "Choose at least one claim to decide"),
+});
+
+export const bulkFollowUpSchema = z.object({
+  claimIds: claimIdsSchema,
+  followUpDate: dateStringSchema,
+  note: z.string().trim().max(1000).optional(),
+});

@@ -1,12 +1,14 @@
-import type { NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
+import { StatusCategory } from "@/lib/generated/prisma/enums";
 import {
   apiErrorResponse,
-  paginatedResponse,
   parsePagination,
   requireAuth,
   zodErrorResponse,
 } from "@/lib/api-helpers";
 import { canAccessBatch } from "@/lib/ar-access";
+import { ACTIONABLE_WHERE } from "@/lib/ar-actionable";
+import { centsToDecimalString, toCents } from "@/lib/money";
 import { claimListWhere, parseClaimFilters } from "@/lib/ar-claim-filters";
 import { manuallyReassignedTo } from "@/lib/ar-reassignment";
 import { CLAIM_INCLUDE, toClaimDto } from "@/lib/ar-serialize";
@@ -72,7 +74,15 @@ export async function GET(request: NextRequest) {
     startOfTodayUtc(),
   );
 
-  const [claims, total] = await Promise.all([
+  /**
+   * The summary bar's figures, over the same filters — but **always** over
+   * actionable claims, even when the checkbox or a 0–30 bucket has put fresh
+   * claims on screen. A total, a balance and an average in this module
+   * describe workable claims; the rows can show more.
+   */
+  const statsWhere = { AND: [where, ACTIONABLE_WHERE] };
+
+  const [claims, total, byCategory, unassignedCount] = await Promise.all([
     prisma.arClaim.findMany({
       where,
       orderBy: claimOrderBy(filters.sort, filters.direction),
@@ -81,6 +91,15 @@ export async function GET(request: NextRequest) {
       include: CLAIM_INCLUDE,
     }),
     prisma.arClaim.count({ where }),
+    prisma.arClaim.groupBy({
+      by: ["statusCategory"],
+      where: statsWhere,
+      _count: { _all: true },
+      _sum: { balance: true, agingDays: true },
+    }),
+    prisma.arClaim.count({
+      where: { AND: [statsWhere, { assignedToId: null }] },
+    }),
   ]);
 
   /**
@@ -96,12 +115,68 @@ export async function GET(request: NextRequest) {
         })
       : null;
 
-  return paginatedResponse(
-    claims.map((claim) => ({
+  /**
+   * What each row's pending request is asking for, for the ⏳ marker. One
+   * lookup for the page rather than a join on every claim query.
+   */
+  const pendingIds = Array.from(
+    new Set(
+      claims
+        .map((claim) => claim.pendingStatusRequestId)
+        .filter((id): id is string => id !== null),
+    ),
+  );
+
+  const pendingRequests = new Map(
+    (pendingIds.length > 0
+      ? await prisma.arStatusRequest.findMany({
+          where: { id: { in: pendingIds } },
+          select: { id: true, requestedStatus: true },
+        })
+      : []
+    ).map((entry) => [entry.id, entry.requestedStatus]),
+  );
+
+  const countIn = (category: StatusCategory) =>
+    byCategory.find((row) => row.statusCategory === category)?._count._all ?? 0;
+
+  const statsCount = byCategory.reduce((sum, row) => sum + row._count._all, 0);
+  const agingSum = byCategory.reduce(
+    (sum, row) => sum + (row._sum.agingDays ?? 0),
+    0,
+  );
+  const balanceCents = byCategory.reduce(
+    (sum, row) => sum + toCents(row._sum.balance?.toString()),
+    0n,
+  );
+
+  const totalPages = Math.max(1, Math.ceil(total / pagination.pageSize));
+
+  return NextResponse.json({
+    data: claims.map((claim) => ({
       ...toClaimDto(claim),
       reassignment: reassignment?.context.get(claim.id) ?? null,
+      pendingStatus: claim.pendingStatusRequestId
+        ? (pendingRequests.get(claim.pendingStatusRequestId) ?? null)
+        : null,
     })),
-    total,
-    pagination,
-  );
+    pagination: {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      total,
+      totalPages,
+    },
+    meta: {
+      totalCount: statsCount,
+      totalBalance: centsToDecimalString(balanceCents),
+      redCount: countIn(StatusCategory.RED),
+      blueCount: countIn(StatusCategory.BLUE),
+      greenCount: countIn(StatusCategory.GREEN),
+      unassignedCount,
+      avgAgingDays: statsCount === 0 ? 0 : Math.round(agingSum / statsCount),
+      page: pagination.page,
+      totalPages,
+      limit: pagination.pageSize,
+    },
+  });
 }

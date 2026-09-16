@@ -577,6 +577,67 @@ them, and it leaves the building.
   resolved before `visit_id` so the more specific header claims its column
   first — a bare "Visit" would otherwise take either.
 
+### Batch page: summary, quick update, analysis, alerts
+
+The batch claim list grew four things around it. **All of them count
+actionable claims only** (`agingDays > 30`), whatever the list is showing.
+
+- **Summary bar.** `GET /api/ar/claims` returns `meta` (count, balance,
+  red/blue/green, unassigned, average aging) computed over
+  `{ AND: [where, ACTIONABLE_WHERE] }` — ticking "Include 0–30 day claims"
+  adds rows to the table but never moves the totals.
+- **Row expansion.** Clicking a row opens `ClaimQuickPanel` inline — one row
+  at a time, local state rather than the URL (a glance is not a place), Escape
+  closes, and it closes itself three seconds after an update. The refresh after
+  an update is *quiet* (`load({ quiet: true })`): the skeleton would unmount
+  the table and the panel with it. Writes announce `ar:claims-changed`
+  ([lib/ar/claims-changed.ts](lib/ar/claims-changed.ts)) and every panel on the
+  page reloads from that.
+- **Quick update and status requests** live in
+  [lib/ar/status-requests.ts](lib/ar/status-requests.ts).
+  - A manager's update applies at once (`POST /api/ar/claims/quick-update`),
+    writing an `OTHER` work note per claim; blue still escalates.
+  - A biller's becomes an `ArStatusRequest` with **one
+    `ArStatusRequestItem` per claim**; the items are the source of truth, and
+    `ArClaim.pendingStatusRequestId` marks a claim as waiting (⏳ in the
+    list). A claim already waiting is skipped and reported, not refused
+    wholesale; the pointer is taken with a guarded `updateMany` so two requests
+    cannot hold one claim.
+  - **Review is per item** (`PATCH /api/ar/status-requests/[id]/review`).
+    Only approved items change status; an item already decided is ignored, so
+    a stale screen cannot write twice. The note for an approved item is
+    credited to the **requesting biller** — it is their work — and says who
+    approved it.
+  - A request is open while it has a **PENDING item**, not while its status
+    reads PENDING/PARTIALLY_APPROVED: one approved plus one rejected is
+    PARTIALLY_APPROVED with nothing left to decide. Query on the items.
+  - A manager's direct update **supersedes** pending items on those claims
+    (rejected with a note saying so).
+- **Bulk follow-up date** (`POST /api/ar/claims/bulk-follow-up`) applies
+  immediately, billers to their own claims only, with a note per claim — so it
+  counts as note-based activity in productivity.
+- **Analysis tab.** `GET /api/ar/batches/[batchId]/analysis` is one `groupBy`
+  over the union of the primary and sub dimensions' columns, folded into a tree
+  in [lib/ar/batch-analysis.ts](lib/ar/batch-analysis.ts). It reads the same
+  `parseClaimFilters`/`claimListWhere` as the list, so clicking a figure opens
+  the list under filters that mean the same thing. Null provider and visit
+  status cannot be expressed as list filters, so those drill-downs drop that
+  step.
+- **Smart Alerts tab.** Eight detectors in
+  [lib/ar/smart-alerts.ts](lib/ar/smart-alerts.ts), thresholds in
+  `ALERT_THRESHOLDS` ([lib/ar/batch-insights-shared.ts](lib/ar/batch-insights-shared.ts),
+  Prisma-free). Each claim alert's condition is `alertClaimWhere(type, key)`,
+  used **both** to count and by the claim list's `alert`/`alertKey` params, so
+  "View affected claims" lists exactly what was counted. Denial reasons group
+  on `LOWER(TRIM())` in raw SQL. `agingDays` is an import snapshot, so
+  "crossed 90 days this week" adds the days since upload. Billers get their own
+  claims' alerts and not the three about running a team (pace, unactioned blue,
+  idle billers). Dismissing hides an alert for the visit only — it is
+  recomputed, so if it is still true tomorrow it is back.
+- "How checked" filters on the claim's work notes
+  (`structuredFields.howChecked`), matching a claim with any note checked
+  that way.
+
 ### Claim visibility rules
 
 - The biller queue (`/api/ar/claims/my-queue`) enforces four conditions in one
@@ -867,6 +928,7 @@ npx tsx scripts/test-lazy-schedule.ts  # sweep rate limit, per scope
 npx tsx scripts/test-filter-params.ts  # URL filter round trip, foreign params
 npx tsx scripts/test-visit-status.ts   # the filter's options query, on real batches
 npx tsx scripts/test-claim-filters.ts  # status multi-selects, and the export sharing them
+npx tsx scripts/test-batch-insights.ts # smart alerts, per-item approval, pivot grouping
 npx tsx scripts/test-my-queue.ts   # queue scoping (needs the dev server)
 npx tsx scripts/test-tracker-scoring.ts  # practice health scoring model
 ```
