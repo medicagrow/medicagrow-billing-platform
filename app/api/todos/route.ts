@@ -112,7 +112,12 @@ export async function GET(request: NextRequest) {
           ? [{ status: direction }]
           : filters.sort === "assignedTo"
             ? [{ assignedTo: { name: direction } }]
-            : [{ dueDate: { sort: direction, nulls: "last" as const } }];
+            : filters.sort === "estimatedMinutes"
+              ? // Unestimated tasks sort last **both ways** — a null is a
+                // missing estimate, not a zero-minute one, so it belongs at
+                // the bottom whichever end of the scale is being read.
+                [{ estimatedMinutes: { sort: direction, nulls: "last" as const } }]
+              : [{ dueDate: { sort: direction, nulls: "last" as const } }];
 
   const [todos, total] = await Promise.all([
     prisma.todo.findMany({

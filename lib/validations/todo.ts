@@ -94,7 +94,14 @@ export const listTodosQuerySchema = z.object({
   isRecurring: z.enum(["true", "false"]).optional(),
   isShared: z.enum(["true", "false"]).optional(),
   sort: z
-    .enum(["dueDate", "priority", "title", "status", "assignedTo"])
+    .enum([
+      "dueDate",
+      "priority",
+      "title",
+      "status",
+      "assignedTo",
+      "estimatedMinutes",
+    ])
     .optional(),
   direction: z.enum(["asc", "desc"]).optional(),
 });

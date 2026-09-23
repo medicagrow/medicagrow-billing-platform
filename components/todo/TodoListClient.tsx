@@ -32,9 +32,16 @@ import { formatDate } from "@/lib/format";
 import { hasActiveFilters, useFilterState } from "@/lib/hooks/useFilterState";
 import { useLocalSetting } from "@/lib/hooks/useLocalSetting";
 import { TodoPriority, TodoStatus } from "@/lib/generated/prisma/enums";
+import { formatMinutes } from "@/lib/task-timer-serialize";
 import { TODO_STATUS_LABELS, type TodoDto } from "@/lib/todo-serialize";
 
-type SortKey = "dueDate" | "priority" | "title" | "status" | "assignedTo";
+type SortKey =
+  | "dueDate"
+  | "priority"
+  | "title"
+  | "status"
+  | "assignedTo"
+  | "estimatedMinutes";
 
 
 const PRIORITY_VARIANT: Record<
@@ -523,6 +530,9 @@ export function TodoListClient({
                   <th className="px-4 py-3">
                     <SortHeader label="Priority" sortAs="priority" />
                   </th>
+                  <th className="px-4 py-3 text-right">
+                    <SortHeader label="Est. Time" sortAs="estimatedMinutes" />
+                  </th>
                   <th className="px-4 py-3">
                     <SortHeader label="Status" sortAs="status" />
                   </th>
@@ -589,6 +599,15 @@ export function TodoListClient({
                           {todo.priority}
                         </Badge>
                       </td>
+                      {/* No estimate is a dash, not "0m" — the difference
+                          between unplanned and planned as instant. */}
+                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-slate-600">
+                        {todo.estimatedMinutes === null ? (
+                          <span className="text-slate-400">—</span>
+                        ) : (
+                          formatMinutes(todo.estimatedMinutes)
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <Badge variant={STATUS_VARIANT[todo.status]}>
                           {TODO_STATUS_LABELS[todo.status]}
@@ -611,7 +630,7 @@ export function TodoListClient({
 
                     {expandedId === todo.id ? (
                       <tr>
-                        <td colSpan={8} className="p-0">
+                        <td colSpan={9} className="p-0">
                           <TodoEditPanel
                             todo={todo}
                             practices={practices}
