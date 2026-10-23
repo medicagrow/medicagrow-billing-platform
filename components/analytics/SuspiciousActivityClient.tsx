@@ -30,6 +30,7 @@ const FLAG_TONE: Record<SuspiciousFlag, BadgeVariant> = {
   SHORT_TIMER: "amber",
   EXTREME_OVERRUN: "red",
   NO_PRODUCTIVITY: "violet",
+  AUTO_STOPPED: "amber",
   PATTERN: "sky",
 };
 

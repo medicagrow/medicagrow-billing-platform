@@ -1,6 +1,7 @@
 import { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { productivityConfigFor } from "@/lib/task/productivity-config";
+import { COUNTED_SESSION_WHERE } from "@/lib/task/timer-shared";
 
 /**
  * How much got done, counted from the work itself rather than remembered.
@@ -63,7 +64,12 @@ export async function autoLinkProductivity(
   if (!source) return NOTHING;
 
   const sessions = await prisma.taskTimeLog.findMany({
-    where: { taskId, userId, stoppedAt: { not: null } },
+    where: {
+      taskId,
+      userId,
+      stoppedAt: { not: null },
+      ...COUNTED_SESSION_WHERE,
+    },
     orderBy: { startedAt: "asc" },
     select: { startedAt: true, stoppedAt: true },
   });

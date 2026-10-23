@@ -8,6 +8,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { TASK_INCLUDE, toTaskDto } from "@/lib/task-serialize";
+import { autoStopRunawayTimersIfNeeded } from "@/lib/task/auto-stop";
 import { generateDueInstancesIfNeeded } from "@/lib/task/recurrence";
 import { checkHoldReleasesIfNeeded } from "@/lib/todo/hold-release";
 import { dayEnd, dayStart } from "@/lib/todo/access";
@@ -29,6 +30,9 @@ export async function GET(request: NextRequest) {
   await Promise.all([
     checkHoldReleasesIfNeeded(session!.user.id),
     generateDueInstancesIfNeeded({ assignedToId: session!.user.id }),
+    // A timer left running yesterday must not still be running when its
+    // owner opens their queue today.
+    autoStopRunawayTimersIfNeeded(),
   ]);
 
   const searchParams = request.nextUrl.searchParams;

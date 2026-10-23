@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
 import { canAssignTask, taskVisibilityFilter } from "@/lib/task-access";
 import { TASK_INCLUDE, toTaskDto } from "@/lib/task-serialize";
+import { autoStopRunawayTimersIfNeeded } from "@/lib/task/auto-stop";
 import {
   generateDueInstancesIfNeeded,
   generateFirstInstance,
@@ -34,7 +35,10 @@ export async function GET(request: NextRequest) {
 
   // This list crosses the whole team, so the sweep is not narrowed to the
   // caller: any occurrence that came due must exist before the page is built.
-  await generateDueInstancesIfNeeded();
+  await Promise.all([
+    generateDueInstancesIfNeeded(),
+    autoStopRunawayTimersIfNeeded(),
+  ]);
 
   const searchParams = request.nextUrl.searchParams;
 

@@ -2,6 +2,7 @@ import type { Prisma } from "@/lib/generated/prisma/client";
 import { TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { getTaskLabel } from "@/lib/task/task-label";
+import { COUNTED_SESSION_WHERE } from "@/lib/task/timer-shared";
 
 /**
  * Time and efficiency analysis.
@@ -59,6 +60,7 @@ export function sessionWhere(
     startedAt: { gte: filters.from, lte: filters.to },
     // An unstopped timer has no duration yet and would read as zero.
     stoppedAt: { not: null },
+    ...COUNTED_SESSION_WHERE,
     ...(filters.userIds?.length ? { userId: { in: filters.userIds } } : {}),
     ...(filters.practiceIds?.length || filters.taskTypeIds?.length
       ? {

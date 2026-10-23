@@ -1,4 +1,7 @@
 import { prisma } from "@/lib/prisma";
+import { COUNTED_SESSION_WHERE } from "@/lib/task/timer-shared";
+
+export { COUNTED_SESSION_WHERE };
 
 /**
  * Task timers.
@@ -26,7 +29,12 @@ export async function recalculateTotalLoggedMinutes(
   taskId: string,
 ): Promise<number> {
   const aggregate = await prisma.taskTimeLog.aggregate({
-    where: { taskId, durationMinutes: { not: null } },
+    where: {
+      taskId,
+      durationMinutes: { not: null },
+      // A session awaiting review is not yet time anybody has agreed to.
+      ...COUNTED_SESSION_WHERE,
+    },
     _sum: { durationMinutes: true },
   });
 

@@ -35,6 +35,7 @@ export {
   type DetectedPattern,
   type SuspiciousActivityResult,
 } from "@/lib/analytics/flags";
+import { COUNTED_SESSION_WHERE } from "@/lib/task/timer-shared";
 
 
 export async function getSuspiciousActivity(
@@ -52,12 +53,14 @@ export async function getSuspiciousActivity(
       : {}),
   };
 
-  const [shortTimers, overruns, noCounts, dismissals] = await Promise.all([
+  const [shortTimers, overruns, autoStopped, noCounts, dismissals] =
+    await Promise.all([
     /** A session too brief to have been the work it is logged against. */
     prisma.taskTimeLog.findMany({
       where: {
         startedAt: { gte: params.from, lte: params.to },
         stoppedAt: { not: null },
+        ...COUNTED_SESSION_WHERE,
         durationMinutes: { lt: THRESHOLDS.shortTimerMaxMinutes },
         ...(params.billerIds?.length ? { userId: { in: params.billerIds } } : {}),
         task: {
@@ -112,6 +115,42 @@ export async function getSuspiciousActivity(
         practice: { select: { name: true } },
         taskTypeId: true,
         taskType: { select: { name: true } },
+      },
+    }),
+    /**
+     * Timers the sweep had to stop (01 P1-01).
+     *
+     * Reported whatever their review state: approving the session settles how
+     * many hours count, not the fact that the timer was left running. The
+     * figure a manager wants is how often it happens, and to whom.
+     */
+    prisma.taskTimeLog.findMany({
+      where: {
+        startedAt: { gte: params.from, lte: params.to },
+        autoStopped: true,
+        ...(params.billerIds?.length ? { userId: { in: params.billerIds } } : {}),
+        task: taskScope,
+      },
+      select: {
+        id: true,
+        startedAt: true,
+        durationMinutes: true,
+        reviewStatus: true,
+        userId: true,
+        user: { select: { name: true } },
+        task: {
+          select: {
+            id: true,
+            title: true,
+            estimatedMinutes: true,
+            totalLoggedMinutes: true,
+            productivityCount: true,
+            practiceId: true,
+            practice: { select: { name: true } },
+            taskTypeId: true,
+            taskType: { select: { name: true } },
+          },
+        },
       },
     }),
     /** Closed, timed, and nothing to show for it. */
@@ -236,6 +275,32 @@ export async function getSuspiciousActivity(
     }
   }
 
+  if (wanted("AUTO_STOPPED")) {
+    for (const log of autoStopped) {
+      const flagKey = `AUTO_STOPPED:${log.id}`;
+
+      sessions.push({
+        flagKey,
+        flagType: "AUTO_STOPPED",
+        timeLogId: log.id,
+        taskId: log.task.id,
+        taskLabel: getTaskLabel(log.task),
+        practiceId: log.task.practiceId,
+        practiceName: log.task.practice?.name ?? null,
+        taskTypeId: log.task.taskTypeId,
+        taskTypeName: log.task.taskType?.name ?? UNTYPED,
+        billerId: log.userId,
+        billerName: log.user.name,
+        occurredAt: log.startedAt.toISOString(),
+        estimatedMinutes: log.task.estimatedMinutes,
+        loggedMinutes: log.durationMinutes ?? 0,
+        productivityCount: log.task.productivityCount,
+        dismissed: dismissedBy.has(flagKey),
+        dismissedByName: dismissedBy.get(flagKey) ?? null,
+      });
+    }
+  }
+
   /* ------------------------------ patterns ------------------------------ */
 
   /**
@@ -312,6 +377,7 @@ export async function getSuspiciousActivity(
     SHORT_TIMER: 0,
     EXTREME_OVERRUN: 0,
     NO_PRODUCTIVITY: 0,
+    AUTO_STOPPED: 0,
     PATTERN: patterns.filter((pattern) => !pattern.dismissed).length,
   };
 

@@ -6,6 +6,7 @@ import {
   type TaskTypeProductivity,
   type TeamProductivityQuery,
 } from "@/lib/productivity/types";
+import { COUNTED_SESSION_WHERE } from "@/lib/task/timer-shared";
 
 /**
  * Time and task-type output behind the team table.
@@ -28,6 +29,7 @@ function sessionWhere(query: TeamProductivityQuery) {
     userId: { in: query.userIds },
     startedAt: { gte: query.from, lte: query.to },
     stoppedAt: { not: null },
+    ...COUNTED_SESSION_WHERE,
     ...(Object.keys(practices).length > 0 ? { task: practices } : {}),
   };
 }

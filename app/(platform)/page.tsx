@@ -15,6 +15,7 @@ import {
 } from "@/lib/generated/prisma/enums";
 import { centsToDecimalString, toCents } from "@/lib/money";
 import { prisma } from "@/lib/prisma";
+import { autoStopRunawayTimersIfNeeded } from "@/lib/task/auto-stop";
 import { generateDueInstancesIfNeeded } from "@/lib/task/recurrence";
 import { dayEnd, dayStart } from "@/lib/todo/access";
 import { checkHoldReleasesIfNeeded } from "@/lib/todo/hold-release";
@@ -113,6 +114,7 @@ export default async function DashboardPage({
   await Promise.all([
     checkHoldReleasesIfNeeded(user.id),
     generateDueInstancesIfNeeded(),
+    autoStopRunawayTimersIfNeeded(),
   ]);
 
   const today = dayStart();

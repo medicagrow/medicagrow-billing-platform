@@ -75,14 +75,21 @@ model User {
   practices        UserPractice[] @relation("UserPracticeAssignee")
   practicesGranted UserPractice[] @relation("UserPracticeAssigner")
 
-  arBatchesUploaded   ArBatch[]    @relation("ArBatchUploadedBy")
-  arBatchesClosed     ArBatch[]    @relation("ArBatchClosedBy")
-  arClaimsAssigned    ArClaim[]    @relation("ArClaimAssignedTo")
-  arClaimsLastWorked  ArClaim[]    @relation("ArClaimLastWorkedBy")
-  arWorkNotes         ArWorkNote[] @relation("ArWorkNoteWorkedBy")
-  arWorkNotesAssigned ArWorkNote[] @relation("ArWorkNoteAssignedTo")
-  arStatusRequestsMade     ArStatusRequest[] @relation("ArStatusRequestRequestedBy")
-  arStatusRequestsReviewed ArStatusRequest[] @relation("ArStatusRequestReviewedBy")
+  arBatchesUploaded        ArBatch[]               @relation("ArBatchUploadedBy")
+  arBatchesClosed          ArBatch[]               @relation("ArBatchClosedBy")
+  arClaimsAssigned         ArClaim[]               @relation("ArClaimAssignedTo")
+  arClaimsLastWorked       ArClaim[]               @relation("ArClaimLastWorkedBy")
+  arWorkNotes              ArWorkNote[]            @relation("ArWorkNoteWorkedBy")
+  arWorkNotesAssigned      ArWorkNote[]            @relation("ArWorkNoteAssignedTo")
+  arStatusRequestsMade     ArStatusRequest[]       @relation("ArStatusRequestRequestedBy")
+  arStatusRequestsReviewed ArStatusRequest[]       @relation("ArStatusRequestReviewedBy")
+  timeLogsReviewed         TaskTimeLog[]           @relation("TaskTimeLogReviewedBy")
+  timeLogAdjustments       TaskTimeLogAdjustment[] @relation("TimeLogAdjustedBy")
+  appSettingsUpdated       AppSetting[]            @relation("AppSettingUpdatedBy")
+  arPayerRulesUpdated      ArPayerRule[]           @relation("ArPayerRuleUpdatedBy")
+  arAssignmentsMade        ArClaimAssignment[]     @relation("ArClaimAssignmentBy")
+  arAssignmentsFrom        ArClaimAssignment[]     @relation("ArClaimAssignmentFrom")
+  arAssignmentsTo          ArClaimAssignment[]     @relation("ArClaimAssignmentTo")
 
   eobBatchesPosted     EobBatch[]    @relation("EobBatchPostedBy")
   eobEntriesAssigned   EobEntry[]    @relation("EobEntryAssignedTo")
@@ -155,7 +162,7 @@ model Practice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  primaryPm      User?              @relation("PracticePrimaryPm", fields: [primaryPmId], references: [id], onDelete: SetNull)
+  primaryPm      User?                 @relation("PracticePrimaryPm", fields: [primaryPmId], references: [id], onDelete: SetNull)
   users          UserPractice[]
   arBatches      ArBatch[]
   providers      PracticeProvider[]
@@ -231,10 +238,10 @@ model ArBatch {
   createdAt            DateTime    @default(now())
   updatedAt            DateTime    @updatedAt
 
-  practice   Practice  @relation(fields: [practiceId], references: [id], onDelete: Cascade)
-  uploadedBy User      @relation("ArBatchUploadedBy", fields: [uploadedById], references: [id])
-  closedBy   User?     @relation("ArBatchClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
-  claims     ArClaim[]
+  practice       Practice          @relation(fields: [practiceId], references: [id], onDelete: Cascade)
+  uploadedBy     User              @relation("ArBatchUploadedBy", fields: [uploadedById], references: [id])
+  closedBy       User?             @relation("ArBatchClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+  claims         ArClaim[]
   statusRequests ArStatusRequest[]
 
   @@index([practiceId, status])
@@ -301,6 +308,7 @@ model ArClaim {
   pendingStatusRequestId String?
   pendingStatusRequest   ArStatusRequest?      @relation("ArClaimPendingRequest", fields: [pendingStatusRequestId], references: [id], onDelete: SetNull)
   statusRequestItems     ArStatusRequestItem[]
+  assignmentHistory      ArClaimAssignment[]
 
   @@index([batchId])
   /// The claim list's default read: one batch, oldest first. Without the
@@ -357,6 +365,40 @@ model ArWorkNote {
 
 /// Self-populating list of denial reasons. Matched case-insensitively at the
 /// API layer; `reason` is stored in the casing it was first entered with.
+/// Who moved a claim from whose queue to whose, and when.
+///
+/// ADD-ONLY. The claim itself says who holds it now; it has never said how it
+/// got there. Everything else in AR is attributable — notes, status requests,
+/// escalations — and assignment was the one hole: 208 claims reached the
+/// Owner's queue with no record of who put them there or when.
+model ArClaimAssignment {
+  id           String             @id @default(cuid())
+  claimId      String
+  /// Null when the claim was unassigned before this.
+  fromUserId   String?
+  /// Null when the claim is being taken back off somebody.
+  toUserId     String?
+  assignedById String
+  assignedAt   DateTime           @default(now())
+  /// Which control did it: a single row's dropdown, or the bulk assign bar.
+  source       ArAssignmentSource
+
+  claim      ArClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  fromUser   User?   @relation("ArClaimAssignmentFrom", fields: [fromUserId], references: [id], onDelete: SetNull)
+  toUser     User?   @relation("ArClaimAssignmentTo", fields: [toUserId], references: [id], onDelete: SetNull)
+  assignedBy User    @relation("ArClaimAssignmentBy", fields: [assignedById], references: [id])
+
+  @@index([claimId, assignedAt])
+  @@index([assignedById, assignedAt])
+  @@index([toUserId, assignedAt])
+  @@map("ar_claim_assignments")
+}
+
+enum ArAssignmentSource {
+  SINGLE
+  BULK
+}
+
 model ArDenialReason {
   id         String    @id @default(cuid())
   reason     String    @unique
@@ -703,9 +745,9 @@ model Task {
   /// alone — but stored on every task rather than in a side table: it is one
   /// nullable column against a join, and a null already means "spread this
   /// over nothing, count it on its due date" for the rest.
-  dailyHours Decimal?  @db.Decimal(4, 2)
-  priority         TodoPriority @default(MEDIUM)
-  status           TaskStatus   @default(OPEN)
+  dailyHours Decimal?     @db.Decimal(4, 2)
+  priority   TodoPriority @default(MEDIUM)
+  status     TaskStatus   @default(OPEN)
 
   /// Required when status is HOLD; the task returns to OPEN on this date.
   holdReleaseDate DateTime?
@@ -785,6 +827,18 @@ model TaskTimeLog {
   /// Whole minutes between start and stop, set when the timer stops.
   durationMinutes Int?
 
+  /// Stopped by the auto-stop sweep rather than by the person working.
+  autoStopped   Boolean           @default(false)
+  autoStoppedAt DateTime?
+  /// Hours are not counted anywhere while this is PENDING. Existing sessions
+  /// default to NOT_REQUIRED so a migration changes no report.
+  reviewStatus  TimerReviewStatus @default(NOT_REQUIRED)
+  reviewedById  String?
+  reviewedAt    DateTime?
+  /// The biller's account of when they actually stopped. They may write it;
+  /// only a PM or Owner may approve the session.
+  billerNote    String?
+
   isEdited                Boolean   @default(false)
   editRequestedAt         DateTime?
   editApprovedAt          DateTime?
@@ -796,14 +850,26 @@ model TaskTimeLog {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  task           Task                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user           User                  @relation("TaskTimeLogUser", fields: [userId], references: [id])
-  editApprovedBy User?                 @relation("TaskTimeLogApprovedBy", fields: [editApprovedById], references: [id], onDelete: SetNull)
+  task           Task                    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user           User                    @relation("TaskTimeLogUser", fields: [userId], references: [id])
+  editApprovedBy User?                   @relation("TaskTimeLogApprovedBy", fields: [editApprovedById], references: [id], onDelete: SetNull)
+  reviewedBy     User?                   @relation("TaskTimeLogReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
   editRequests   TaskTimeEditRequest[]
+  adjustments    TaskTimeLogAdjustment[]
 
   @@index([taskId])
   @@index([userId, startedAt])
+  /// The review queue reads this directly, and every report filters on it.
+  @@index([reviewStatus])
   @@map("task_time_logs")
+}
+
+/// Whether an auto-stopped session has been reviewed, and so whether its
+/// hours may be counted. A normal session is NOT_REQUIRED and counts at once.
+enum TimerReviewStatus {
+  NOT_REQUIRED
+  PENDING
+  APPROVED
 }
 
 enum TimeEditRequestStatus {
@@ -814,6 +880,31 @@ enum TimeEditRequestStatus {
 
 /// A biller's request to correct a time log. Approval is a PM/Owner action —
 /// nobody reviews their own.
+/// Every change made to an auto-stopped session while reviewing it.
+///
+/// ADD-ONLY. TaskTimeLog already keeps one `originalDurationMinutes`, which
+/// holds exactly one correction; a session that is corrected twice would lose
+/// the first. A reviewed timer is a number somebody may be paid against, so
+/// the history is the point.
+model TaskTimeLogAdjustment {
+  id                 String    @id @default(cuid())
+  logId              String
+  oldStoppedAt       DateTime?
+  newStoppedAt       DateTime
+  oldDurationMinutes Int?
+  newDurationMinutes Int
+  note               String?
+  changedById        String
+  changedAt          DateTime  @default(now())
+
+  log       TaskTimeLog @relation(fields: [logId], references: [id], onDelete: Cascade)
+  changedBy User        @relation("TimeLogAdjustedBy", fields: [changedById], references: [id])
+
+  @@index([logId, changedAt])
+  @@index([changedById])
+  @@map("task_time_log_adjustments")
+}
+
 model TaskTimeEditRequest {
   id            String @id @default(cuid())
   timeLogId     String
@@ -845,12 +936,16 @@ model TaskTimeEditRequest {
 /// Owner-managed classification for tasks. Deactivating hides a type from the
 /// pickers without rewriting the tasks that already carry it.
 model TaskType {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  isActive  Boolean  @default(true)
-  sortOrder Int      @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  name         String   @unique
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  /// Whether "how many" is a meaningful question for this type. The
+  /// "closed without count" flag only fires where it is — it fired 664 times
+  /// in one month against types like Clinic Inquiry that have no unit.
+  unitRequired Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   tasks        Task[]
   requirements PracticeRequirement[]
@@ -925,6 +1020,42 @@ model TimeBlock {
 
 /// Owner-editable scoring configuration: weights and score bands.
 /// Keyed rows rather than columns so a new setting needs no migration.
+/// Owner settings that are not about one module.
+///
+/// Same key/JSON shape as TrackerConfig, deliberately separate: that table is
+/// the tracker's scoring configuration, and overloading it would make "what
+/// configures the tracker" unanswerable. Holds the timer auto-stop cap now,
+/// and the per-shift auto-stop times once shifts exist (02 F-01).
+model AppSetting {
+  settingKey   String   @id
+  settingValue Json
+  updatedById  String?
+  updatedAt    DateTime @updatedAt
+
+  updatedBy User? @relation("AppSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("app_settings")
+}
+
+/// Per-payer claim rules. Timely filing first; the eligibility module (07 A4)
+/// extends this row rather than adding a second payer table.
+model ArPayerRule {
+  id               String   @id @default(cuid())
+  payerName        String   @unique
+  /// Days from date of service to the filing deadline. Payer limits run from
+  /// 90 days to over a year, so the fixed 90–120 day window the smart alert
+  /// used could not express any of them.
+  timelyFilingDays Int      @default(90)
+  notes            String?
+  updatedById      String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  updatedBy User? @relation("ArPayerRuleUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("ref_payer_rule")
+}
+
 model TrackerConfig {
   id          String   @id @default(cuid())
   configKey   String   @unique

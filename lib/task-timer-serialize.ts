@@ -1,4 +1,7 @@
-import type { TimeEditRequestStatus } from "@/lib/generated/prisma/enums";
+import type {
+  TimeEditRequestStatus,
+  TimerReviewStatus,
+} from "@/lib/generated/prisma/enums";
 
 export interface TaskTimeLogDto {
   id: string;
@@ -14,6 +17,17 @@ export interface TaskTimeLogDto {
   editNote: string | null;
   /** Status of the most recent edit request, so the row can show "pending". */
   pendingEditRequestId: string | null;
+  /**
+   * An auto-stopped session is shown, not hidden: this is where the biller
+   * sees what happened and says when they actually stopped. Its hours are
+   * excluded from every report until a PM or Owner approves it, so the row
+   * has to say so rather than quietly showing a figure nothing else counts.
+   */
+  autoStopped: boolean;
+  reviewStatus: TimerReviewStatus;
+  reviewedByName: string | null;
+  reviewedAt: string | null;
+  billerNote: string | null;
 }
 
 type TimeLogRow = {
@@ -26,8 +40,13 @@ type TimeLogRow = {
   isEdited: boolean;
   originalDurationMinutes: number | null;
   editNote: string | null;
+  autoStopped: boolean;
+  reviewStatus: TimerReviewStatus;
+  reviewedAt: Date | null;
+  billerNote: string | null;
   user?: { name: string } | null;
   editApprovedBy?: { name: string } | null;
+  reviewedBy?: { name: string } | null;
   editRequests?: { id: string; status: TimeEditRequestStatus }[];
 };
 
@@ -49,12 +68,18 @@ export function toTaskTimeLogDto(log: TimeLogRow): TaskTimeLogDto {
     editApprovedByName: log.editApprovedBy?.name ?? null,
     editNote: log.editNote,
     pendingEditRequestId: pending?.id ?? null,
+    autoStopped: log.autoStopped,
+    reviewStatus: log.reviewStatus,
+    reviewedByName: log.reviewedBy?.name ?? null,
+    reviewedAt: log.reviewedAt?.toISOString() ?? null,
+    billerNote: log.billerNote,
   };
 }
 
 export const TIME_LOG_INCLUDE = {
   user: { select: { name: true } },
   editApprovedBy: { select: { name: true } },
+  reviewedBy: { select: { name: true } },
   editRequests: {
     orderBy: { createdAt: "desc" as const },
     select: { id: true, status: true },

@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { AssignTaskButton } from "@/components/task/AssignTaskButton";
 import { TeamTasksClient } from "@/components/task/TeamTasksClient";
 import { TimeEditRequestsPanel } from "@/components/task/TimeEditRequestsPanel";
+import { TimerReviewPanel } from "@/components/task/TimerReviewPanel";
 import { accessiblePracticeIds, canManageBatches } from "@/lib/ar-access";
 import { Role, TaskStatus } from "@/lib/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
@@ -143,6 +144,17 @@ export default async function TeamTasksPage({
         practices={practices}
         selectedPracticeIds={selectedPracticeIds}
       />
+
+      {/*
+        Timer review comes first: nothing in it is counted in any report yet,
+        so it is the queue that is actively holding numbers back.
+      */}
+      <div className="mt-6" id="timer-review">
+        <h3 className="mb-2 text-sm font-semibold text-slate-900">
+          Timer review
+        </h3>
+        <TimerReviewPanel />
+      </div>
 
       <div className="mt-6">
         <TimeEditRequestsPanel />

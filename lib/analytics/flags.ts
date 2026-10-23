@@ -12,6 +12,7 @@ export const FLAG_TYPES = [
   "SHORT_TIMER",
   "EXTREME_OVERRUN",
   "NO_PRODUCTIVITY",
+  "AUTO_STOPPED",
   "PATTERN",
 ] as const;
 
@@ -21,6 +22,7 @@ export const FLAG_LABELS: Record<SuspiciousFlag, string> = {
   SHORT_TIMER: "Short timer",
   EXTREME_OVERRUN: "Extreme overrun",
   NO_PRODUCTIVITY: "Closed without count",
+  AUTO_STOPPED: "Timer left running",
   PATTERN: "Repeated pattern",
 };
 
@@ -41,6 +43,12 @@ export const THRESHOLDS = {
   overrunMultiple: 3,
   patternOccurrences: 3,
 } as const;
+
+/**
+ * A forgotten timer is a training issue, not a suspicion — which is why it is
+ * a flag and not a block. Repeat offenders are what the count is for: one
+ * biller accounted for twelve of the forty-four sessions over ten hours.
+ */
 
 /** Five or more of the same thing is worse than three. */
 export const SEVERE_OCCURRENCES = 5;

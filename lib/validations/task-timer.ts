@@ -27,6 +27,32 @@ export const createTimeEditRequestSchema = z
     { message: "The corrected time must be at least one minute.", path: ["stoppedAt"] },
   );
 
+/**
+ * Approving an auto-stopped session, optionally correcting its end time
+ * (01 P1-01). An absent `newStoppedAt` means "approve as it stands".
+ *
+ * The bounds — after the start, not after the auto-stop — need the log, so
+ * the route checks them; this only takes the shape.
+ */
+export const timerReviewSchema = z.object({
+  newStoppedAt: dateTimeSchema.optional(),
+  note: z
+    .union([z.string(), z.null(), z.undefined()])
+    .transform((value) => (value ?? "").trim())
+    .transform((value) => (value === "" ? undefined : value.slice(0, 1000)))
+    // A transform pipeline hides that undefined is acceptable.
+    .optional(),
+});
+
+/** The biller's note on when they actually stopped. */
+export const billerTimerNoteSchema = z.object({
+  billerNote: z
+    .string()
+    .trim()
+    .min(1, "Say when you actually stopped working")
+    .max(1000),
+});
+
 export const reviewTimeEditRequestSchema = z.object({
   status: z.enum([
     TimeEditRequestStatus.APPROVED,

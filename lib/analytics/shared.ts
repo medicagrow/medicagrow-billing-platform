@@ -1,4 +1,5 @@
 import { centsToDecimalString, toCents } from "@/lib/money";
+import { COUNTED_SESSION_WHERE } from "@/lib/task/timer-shared";
 
 /**
  * Vocabulary the analytics reports share.
@@ -112,6 +113,8 @@ export function sessionWhere(filters: AnalyticsFilters) {
   return {
     startedAt: { gte: filters.from, lte: filters.to },
     stoppedAt: { not: null },
+    // Pending-review hours are not counted anywhere (01 P1-01).
+    ...COUNTED_SESSION_WHERE,
     ...(filters.billerIds?.length ? { userId: { in: filters.billerIds } } : {}),
     ...(filters.practiceIds?.length || filters.taskTypeIds?.length
       ? {

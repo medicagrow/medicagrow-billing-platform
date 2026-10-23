@@ -9,6 +9,7 @@ import {
 import { isWeekend, toIsoDate } from "@/lib/task/recurrence-config";
 import { getTaskLabel } from "@/lib/task/task-label";
 import { dayStart } from "@/lib/todo/access";
+import { COUNTED_SESSION_WHERE } from "@/lib/task/timer-shared";
 
 /**
  * Who is booked, who is free, and on which day.
@@ -284,6 +285,7 @@ export async function getWorkloadData(params: {
       where: {
         startedAt: { gte: params.from, lte: params.to },
         stoppedAt: { not: null },
+        ...COUNTED_SESSION_WHERE,
         ...(params.userIds?.length ? { userId: { in: params.userIds } } : {}),
         ...(params.practiceIds?.length
           ? { task: { practiceId: { in: params.practiceIds } } }
