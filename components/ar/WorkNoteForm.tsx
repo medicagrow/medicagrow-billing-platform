@@ -11,6 +11,12 @@ import { Select, Textarea } from "@/components/ui/Select";
 import { SpinnerIcon } from "@/components/ui/icons";
 import { useToast } from "@/components/ui/toast";
 import { generateNote, type NoteFields } from "@/lib/ar-note-format";
+import { startOfTodayUtcDate } from "@/lib/calendar";
+import { formatDate } from "@/lib/format";
+import {
+  FOLLOW_UP_CONFIRM_DAYS,
+  isFollowUpFarOut,
+} from "@/lib/validations/ar";
 import {
   DENIAL_ACTIONS,
   HOW_CHECKED_OPTIONS,
@@ -29,6 +35,9 @@ import { OutcomeType } from "@/lib/generated/prisma/enums";
 
 /** Contact fields the How Checked selection can switch off. */
 const CONTACT_FIELDS = ["spokeWith", "refNumber", "phone"] as const;
+
+/** Today as YYYY-MM-DD, for the date picker's floor. */
+const todayIso = () => startOfTodayUtcDate().toISOString().slice(0, 10);
 
 function disabledContactFields(howChecked?: string): Set<string> {
   if (howChecked === "Portal") return new Set(CONTACT_FIELDS);
@@ -224,6 +233,24 @@ export function WorkNoteForm({
       return;
     }
 
+    /**
+     * A date months out is occasionally right — an appeal with a long payer
+     * clock — so it is confirmed rather than refused. Asked once, here, and
+     * the answer travels with the note.
+     */
+    let followUpConfirmed = false;
+
+    if (followUpDate && isFollowUpFarOut(followUpDate)) {
+      if (
+        !window.confirm(
+          `${formatDate(followUpDate)} is more than ${FOLLOW_UP_CONFIRM_DAYS} days away. Set it anyway?`,
+        )
+      ) {
+        return;
+      }
+      followUpConfirmed = true;
+    }
+
     setSubmitting(true);
 
     try {
@@ -237,6 +264,7 @@ export function WorkNoteForm({
           additionalNotes: additionalNotes.trim() || undefined,
           statusChangedTo: statusLabel,
           followUpDateSet: followUpDate || undefined,
+          followUpConfirmed,
           denialReason:
             outcomeType === OutcomeType.DENIED ? fields.denialReason : undefined,
           reassignToPm,
@@ -711,9 +739,11 @@ export function WorkNoteForm({
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Follow-up date (optional)" htmlFor="followUpDate">
+            {/* The picker refuses a past date; the route checks it again. */}
             <Input
               id="followUpDate"
               type="date"
+              min={todayIso()}
               value={followUpDate}
               onChange={(event) => setFollowUpDate(event.target.value)}
             />

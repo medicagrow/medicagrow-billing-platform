@@ -10,6 +10,12 @@ import { Textarea } from "@/components/ui/Select";
 import { useToast } from "@/components/ui/toast";
 import type { ClaimDto } from "@/lib/ar-serialize";
 import { announceClaimsChanged } from "@/lib/ar/claims-changed";
+import { startOfTodayUtcDate } from "@/lib/calendar";
+import { formatDate } from "@/lib/format";
+import {
+  FOLLOW_UP_CONFIRM_DAYS,
+  isFollowUpFarOut,
+} from "@/lib/validations/ar";
 
 const PREVIEW_PAGE_SIZE = 8;
 
@@ -137,6 +143,21 @@ export function BulkFollowUpModal({
     setError(null);
     if (!date) return setError("Choose a follow-up date.");
 
+    // Same rule as the note form: past dates are refused by the schema, and a
+    // date months out is confirmed rather than refused.
+    let followUpConfirmed = false;
+
+    if (isFollowUpFarOut(date)) {
+      if (
+        !window.confirm(
+          `${formatDate(date)} is more than ${FOLLOW_UP_CONFIRM_DAYS} days away. Set it on ${claims.length} claims anyway?`,
+        )
+      ) {
+        return;
+      }
+      followUpConfirmed = true;
+    }
+
     setSaving(true);
 
     try {
@@ -147,6 +168,7 @@ export function BulkFollowUpModal({
           claimIds: claims.map((claim) => claim.id),
           followUpDate: date,
           note: note.trim() || undefined,
+          followUpConfirmed,
         }),
       });
 
@@ -192,6 +214,7 @@ export function BulkFollowUpModal({
           <Input
             id="bulk-follow-up-date"
             type="date"
+            min={startOfTodayUtcDate().toISOString().slice(0, 10)}
             value={date}
             onChange={(event) => setDate(event.target.value)}
             disabled={saving}

@@ -3,6 +3,7 @@ import { OutcomeType, StatusCategory } from "@/lib/generated/prisma/enums";
 import { AGING_BUCKET_KEYS } from "@/lib/ar-aging";
 import { isStatusValidForOutcome } from "@/lib/ar-outcomes";
 import { ALL_STATUSES, statusLabelToCategory } from "@/lib/ar-status";
+import { startOfTodayUtcDate } from "@/lib/calendar";
 import { dateStringSchema, nonNegativeDecimalSchema } from "@/lib/validations/common";
 
 const currentYear = new Date().getFullYear();
@@ -184,6 +185,39 @@ export const listClaimsQuerySchema = z.object({
   direction: z.enum(["asc", "desc"]).optional(),
 });
 
+/* ----------------------------- follow-up dates ---------------------------- */
+
+/**
+ * A follow-up date says "come back to this claim on this day", so a date in
+ * the past is never what anyone meant — it is a typo, usually in the year, and
+ * it costs twice: the claim is overdue from the moment it is saved, and it
+ * inflates every overdue count that follows. 2,107 of them were sitting in
+ * open batches when this rule was written (LOGIC-05).
+ *
+ * Far-future dates are the same mistake in the other direction, but a long
+ * wait is occasionally real — an appeal with a 120-day payer clock — so those
+ * are confirmed rather than refused.
+ */
+export const FOLLOW_UP_CONFIRM_DAYS = 90;
+
+/** Today, UTC — the same boundary every daily calculation uses. */
+const todayIso = (now = new Date()) =>
+  startOfTodayUtcDate(now).toISOString().slice(0, 10);
+
+export function isFollowUpInPast(value: string, now = new Date()) {
+  return value < todayIso(now);
+}
+
+export function isFollowUpFarOut(value: string, now = new Date()) {
+  const limit = startOfTodayUtcDate(now);
+  limit.setUTCDate(limit.getUTCDate() + FOLLOW_UP_CONFIRM_DAYS);
+
+  return value > limit.toISOString().slice(0, 10);
+}
+
+const PAST_MESSAGE = "A follow-up date must be today or later.";
+const FAR_OUT_MESSAGE = `A follow-up date more than ${FOLLOW_UP_CONFIRM_DAYS} days out has to be confirmed.`;
+
 const statusLabelSchema = z
   .string()
   .refine(
@@ -199,6 +233,12 @@ export const createWorkNoteSchema = z
     additionalNotes: z.string().trim().max(5000).optional(),
     statusChangedTo: statusLabelSchema,
     followUpDateSet: dateStringSchema.optional(),
+    /**
+     * Set by the form once the biller has acknowledged a date more than
+     * FOLLOW_UP_CONFIRM_DAYS out. Checked here as well, so a client that
+     * skips the dialog does not skip the rule.
+     */
+    followUpConfirmed: z.boolean().optional(),
     /** Denial reason is captured separately so the API can upsert it. */
     denialReason: z.string().trim().max(300).optional(),
     /**
@@ -207,6 +247,18 @@ export const createWorkNoteSchema = z
      */
     reassignToPm: z.boolean().optional(),
   })
+  .refine(
+    (data) =>
+      !data.followUpDateSet || !isFollowUpInPast(data.followUpDateSet),
+    { message: PAST_MESSAGE, path: ["followUpDateSet"] },
+  )
+  .refine(
+    (data) =>
+      !data.followUpDateSet ||
+      !isFollowUpFarOut(data.followUpDateSet) ||
+      data.followUpConfirmed === true,
+    { message: FAR_OUT_MESSAGE, path: ["followUpDateSet"] },
+  )
   .refine(
     (data) => isStatusValidForOutcome(data.outcomeType, data.statusChangedTo),
     {
@@ -219,6 +271,7 @@ export const createWorkNoteSchema = z
     // Derived server-side; never trusted from the client.
     statusCategoryChangedTo: statusLabelToCategory(data.statusChangedTo),
   }));
+
 
 export const closeBatchSchema = z.object({
   confirm: z.literal(true, {
@@ -269,8 +322,19 @@ export const reviewStatusRequestSchema = z.object({
     .min(1, "Choose at least one claim to decide"),
 });
 
-export const bulkFollowUpSchema = z.object({
-  claimIds: claimIdsSchema,
-  followUpDate: dateStringSchema,
-  note: z.string().trim().max(1000).optional(),
-});
+export const bulkFollowUpSchema = z
+  .object({
+    claimIds: claimIdsSchema,
+    followUpDate: dateStringSchema,
+    note: z.string().trim().max(1000).optional(),
+    followUpConfirmed: z.boolean().optional(),
+  })
+  .refine((data) => !isFollowUpInPast(data.followUpDate), {
+    message: PAST_MESSAGE,
+    path: ["followUpDate"],
+  })
+  .refine(
+    (data) =>
+      !isFollowUpFarOut(data.followUpDate) || data.followUpConfirmed === true,
+    { message: FAR_OUT_MESSAGE, path: ["followUpDate"] },
+  );

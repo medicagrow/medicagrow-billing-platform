@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { EobEntriesClient } from "@/components/eob/EobEntriesClient";
 import { LogEobModal } from "@/components/eob/LogEobModal";
 import { accessiblePracticeIds } from "@/lib/ar-access";
+import { isDateWithinSupportedRange } from "@/lib/calendar";
 import {
   EobEntryType,
   Role,
@@ -28,11 +29,14 @@ function SummaryCard({
   value,
   tone,
   href,
+  hint,
 }: {
   label: string;
   value: string;
   tone?: "red" | "amber";
   href?: string;
+  /** A second figure the headline needs in order to be read correctly. */
+  hint?: string;
 }) {
   const toneClass =
     tone === "red"
@@ -58,6 +62,7 @@ function SummaryCard({
           {value}
         </p>
       )}
+      {hint ? <p className="mt-1 text-[11px] text-slate-500">{hint}</p> : null}
     </div>
   );
 }
@@ -184,17 +189,53 @@ export default async function EobHomePage({
     atRiskCents += toCents(entry.deniedAmount?.toString() ?? "0");
   }
 
+  /**
+   * Days from the remittance arriving to the entry being resolved.
+   *
+   * Two guards, both learned the hard way (CALC-03). A batch date outside the
+   * supported range is a mistyped year, and one of them — a batch dated 0206 —
+   * single-handedly moved this average to 2,428 days against a median of 6, so
+   * out-of-range rows are left out and counted instead. And the median is
+   * shown beside the mean, because one genuine six-month argument with a payer
+   * drags a mean of a few hundred entries and the card gives no hint of it.
+   *
+   * A negative gap (resolved before the remittance arrived) is also a data
+   * error rather than a fast resolution, so it is excluded on the same basis.
+   */
+  const resolutionDays: number[] = [];
+  let excludedFromResolution = 0;
+
+  for (const entry of resolved) {
+    const batchDate = entry.batch.batchDate;
+    const inRange = isDateWithinSupportedRange(
+      batchDate.toISOString().slice(0, 10),
+    );
+    const days =
+      (entry.resolvedAt!.getTime() - batchDate.getTime()) / 86_400_000;
+
+    if (!inRange || days < 0) {
+      excludedFromResolution += 1;
+      continue;
+    }
+
+    resolutionDays.push(days);
+  }
+
   const avgDaysToResolve =
-    resolved.length === 0
+    resolutionDays.length === 0
       ? null
       : Math.round(
-          resolved.reduce(
-            (total, entry) =>
-              total +
-              (entry.resolvedAt!.getTime() - entry.batch.batchDate.getTime()) /
-                86_400_000,
-            0,
-          ) / resolved.length,
+          resolutionDays.reduce((total, days) => total + days, 0) /
+            resolutionDays.length,
+        );
+
+  const medianDaysToResolve =
+    resolutionDays.length === 0
+      ? null
+      : Math.round(
+          [...resolutionDays].sort((a, b) => a - b)[
+            Math.floor(resolutionDays.length / 2)
+          ]!,
         );
 
   return (
@@ -233,6 +274,14 @@ export default async function EobHomePage({
         <SummaryCard
           label="Avg days to resolve"
           value={avgDaysToResolve === null ? "—" : String(avgDaysToResolve)}
+          hint={
+            medianDaysToResolve === null
+              ? undefined
+              : `Median ${medianDaysToResolve} · ${resolutionDays.length} resolved` +
+                (excludedFromResolution > 0
+                  ? ` · ${excludedFromResolution} excluded (bad batch date)`
+                  : "")
+          }
         />
       </div>
 

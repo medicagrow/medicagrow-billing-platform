@@ -50,9 +50,30 @@ const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 // Defined in lib/calendar.ts so client components can use them without Zod.
 // Imported as well as re-exported, since the schemas below reference it.
-import { isValidCalendarDate } from "@/lib/calendar";
+import {
+  isDateWithinSupportedRange,
+  isValidCalendarDate,
+  MAX_DATE_YEARS_AHEAD,
+  MIN_DATE_YEAR,
+} from "@/lib/calendar";
 
-export { daysInMonth, isLeapYear, isValidCalendarDate } from "@/lib/calendar";
+export {
+  daysInMonth,
+  isDateWithinSupportedRange,
+  isLeapYear,
+  isValidCalendarDate,
+} from "@/lib/calendar";
+
+/**
+ * Both date schemas check three things, in this order: the shape, that the day
+ * exists on the calendar, and that the year is plausible.
+ *
+ * The third is the one that was missing. A year of 0206 or 2206 satisfies the
+ * first two and is accepted by Postgres, so it reaches reports and ruins them
+ * — CALC-03 was a single such row. The bound is deliberately wide; a field
+ * that needs a tighter rule states it itself.
+ */
+const OUT_OF_RANGE = `Enter a year between ${MIN_DATE_YEAR} and ${MAX_DATE_YEARS_AHEAD} years from now`;
 
 /** YYYY-MM-DD in, UTC-midnight Date out. */
 export const dateSchema = z
@@ -60,6 +81,7 @@ export const dateSchema = z
   .trim()
   .refine((value) => DATE_PATTERN.test(value), "Use the format YYYY-MM-DD")
   .refine(isValidCalendarDate, "That date does not exist on the calendar")
+  .refine((value) => isDateWithinSupportedRange(value), OUT_OF_RANGE)
   .transform((value) => new Date(`${value}T00:00:00.000Z`));
 
 /** Same validation, but keeps the YYYY-MM-DD string. */
@@ -67,7 +89,8 @@ export const dateStringSchema = z
   .string()
   .trim()
   .refine((value) => DATE_PATTERN.test(value), "Use the format YYYY-MM-DD")
-  .refine(isValidCalendarDate, "That date does not exist on the calendar");
+  .refine(isValidCalendarDate, "That date does not exist on the calendar")
+  .refine((value) => isDateWithinSupportedRange(value), OUT_OF_RANGE);
 
 /* --------------------------------- money --------------------------------- */
 
