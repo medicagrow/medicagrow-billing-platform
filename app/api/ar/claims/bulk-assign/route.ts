@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { BatchStatus, Role } from "@/lib/generated/prisma/enums";
 import { apiErrorResponse, requireRole, zodErrorResponse } from "@/lib/api-helpers";
+import {
+  ArAssignmentSource,
+  recordAssignments,
+} from "@/lib/ar/assignment-trail";
 import { accessiblePracticeIds } from "@/lib/ar-access";
 import { isNotActionable, NOT_ACTIONABLE_MAX_DAYS } from "@/lib/ar-actionable";
 import { prisma } from "@/lib/prisma";
@@ -47,6 +51,8 @@ export async function POST(request: NextRequest) {
       id: true,
       batchId: true,
       agingDays: true,
+      // Read before the write, so the trail can say who each came from.
+      assignedToId: true,
       batch: { select: { status: true, practiceId: true } },
     },
   });
@@ -105,9 +111,30 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const result = await prisma.arClaim.updateMany({
-    where: { id: { in: assignable.map((claim) => claim.id) } },
-    data: { assignedToId },
+  const result = await prisma.$transaction(async (tx) => {
+    const updated = await tx.arClaim.updateMany({
+      where: { id: { in: assignable.map((claim) => claim.id) } },
+      data: { assignedToId },
+    });
+
+    /**
+     * One createMany for the whole selection. A row per claim written one at
+     * a time would be a few thousand round trips on a batch-sized assign.
+     */
+    await recordAssignments(
+      {
+        changes: assignable.map((claim) => ({
+          claimId: claim.id,
+          fromUserId: claim.assignedToId,
+        })),
+        toUserId: assignedToId,
+        assignedById: session!.user.id,
+        source: ArAssignmentSource.BULK,
+      },
+      tx,
+    );
+
+    return updated;
   });
 
   return NextResponse.json({ updated: result.count, skipped: skipped.length });

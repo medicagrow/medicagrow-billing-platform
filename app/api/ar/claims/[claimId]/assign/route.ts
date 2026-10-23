@@ -5,6 +5,10 @@ import { canAccessBatch } from "@/lib/ar-access";
 import { CLAIM_INCLUDE, toClaimDto } from "@/lib/ar-serialize";
 import { prisma } from "@/lib/prisma";
 import { getSession } from "@/lib/session";
+import {
+  ArAssignmentSource,
+  recordAssignments,
+} from "@/lib/ar/assignment-trail";
 import { assignClaimSchema } from "@/lib/validations/ar";
 
 export async function PATCH(
@@ -24,7 +28,13 @@ export async function PATCH(
 
   const claim = await prisma.arClaim.findUnique({
     where: { id: params.claimId },
-    select: { id: true, batchId: true, batch: { select: { status: true } } },
+    select: {
+      id: true,
+      batchId: true,
+      // Read before the write, so the trail can say who it came from.
+      assignedToId: true,
+      batch: { select: { status: true } },
+    },
   });
 
   if (!claim || !(await canAccessBatch(session!.user, claim.batchId))) {
@@ -49,10 +59,24 @@ export async function PATCH(
     }
   }
 
-  const updated = await prisma.arClaim.update({
-    where: { id: params.claimId },
-    data: { assignedToId: body.data.assignedToId },
-    include: CLAIM_INCLUDE,
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.arClaim.update({
+      where: { id: params.claimId },
+      data: { assignedToId: body.data.assignedToId },
+      include: CLAIM_INCLUDE,
+    });
+
+    await recordAssignments(
+      {
+        changes: [{ claimId: claim.id, fromUserId: claim.assignedToId }],
+        toUserId: body.data.assignedToId,
+        assignedById: session!.user.id,
+        source: ArAssignmentSource.SINGLE,
+      },
+      tx,
+    );
+
+    return row;
   });
 
   return NextResponse.json({ claim: toClaimDto(updated) });
